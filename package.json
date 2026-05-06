@@ -1,0 +1,92 @@
+{
+  "name": "typetype",
+  "version": "0.1.0",
+  "description": "Local voice input tool with offline ASR",
+  "main": "dist-electron/main.js",
+  "author": "typetype",
+  "license": "MIT",
+  "scripts": {
+    "dev": "npm run build:electron && electron .",
+    "build:electron": "node -e \"require('fs').rmSync('dist-electron',{recursive:true,force:true})\" && tsc -p tsconfig.json",
+    "build": "npm run build:electron && electron-builder --mac --windows",
+    "build:mac": "npm run build:electron && electron-builder --mac",
+    "build:win": "npm run build:electron && electron-builder --win"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "@iarna/toml": "^2.2.5",
+    "sherpa-onnx-node": "^1.12.39",
+    "sherpa-onnx-win-x64": "^1.12.39"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "electron": "^33.3.1",
+    "electron-builder": "^25.1.8",
+    "typescript": "^5.7.2"
+  },
+  "build": {
+    "appId": "app.typetype",
+    "productName": "typetype",
+    "directories": {
+      "output": "release"
+    },
+    "asarUnpack": [
+      "node_modules/sherpa-onnx-node/**/*",
+      "node_modules/sherpa-onnx-win-x64/**/*"
+    ],
+    "files": [
+      "src/**/*",
+      "dist/**/*",
+      "dist-electron/**/*",
+      {
+        "from": "resources",
+        "to": "resources",
+        "filter": [
+          "**/*",
+          "!models/**"
+        ]
+      }
+    ],
+    "extraResources": [
+      {
+        "from": "resources/models",
+        "to": "models",
+        "filter": [
+          "**/*",
+          "!**/README.md",
+          "!**/test_wavs",
+          "!**/test_wavs/**"
+        ]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "icon": "resources/icon.icns"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "electronLanguages": [
+        "zh-CN",
+        "en-US"
+      ],
+      "icon": "resources/icon.ico",
+      "extraFiles": [
+        {
+          "from": "node_modules/electron/dist/ffmpeg.dll",
+          "to": "."
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

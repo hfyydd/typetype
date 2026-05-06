@@ -1,0 +1,11 @@
+node_modules/
+dist-electron/
+release/
+.omx/
+.DS_Store
+.claude/
+typetype.log
+
+# Models (too large for GitHub)
+resources/models/
+resources/translation-models/

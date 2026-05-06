@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>typetype overlay</title>
+    <link rel="stylesheet" href="../shared/base.css" />
+  </head>
+  <body class="overlay">
+    <main class="hud" data-state="idle">
+      <section class="hud-recording" id="recording-shell" aria-hidden="true">
+        <div class="waveform" id="waveform"></div>
+      </section>
+      <section class="hud-thinking" id="thinking-shell" aria-hidden="true">
+        <p class="hud-thinking-label" id="thinking-label">Thinking</p>
+      </section>
+      <section class="hud-stop" id="stop-shell" aria-hidden="true">
+        <p class="hud-stop-label" id="stop-label">Stop</p>
+      </section>
+    </main>
+    <script type="module" src="./overlay.js"></script>
+  </body>
+</html>

@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>typetype 设置</title>
+    <link rel="stylesheet" href="../shared/base.css" />
+  </head>
+  <body class="settings-shell">
+    <main class="settings-layout">
+      <aside class="settings-sidebar">
+        <div class="settings-brand">
+          <div class="settings-brand-mark">tn</div>
+          <div>
+            <h1>typetype</h1>
+            <p>本地语音输入</p>
+          </div>
+        </div>
+
+        <nav class="settings-nav" aria-label="设置导航">
+          <button type="button" class="settings-nav-item is-active" data-panel-target="panel-general">设置</button>
+          <button type="button" class="settings-nav-item" data-panel-target="panel-permissions" id="permissions-nav-item">权限</button>
+          <button type="button" class="settings-nav-item" data-panel-target="panel-about">关于</button>
+        </nav>
+
+        <div class="settings-sidebar-divider"></div>
+
+        <nav class="settings-nav settings-nav-secondary" aria-label="帮助导航">
+          <button type="button" class="settings-nav-item" data-panel-target="panel-help">帮助中心</button>
+        </nav>
+      </aside>
+
+      <section class="settings-content">
+        <header class="settings-header">
+          <div>
+            <p class="settings-kicker" id="panel-kicker">设置</p>
+            <h2 id="panel-title">设置</h2>
+          </div>
+          <p class="settings-header-meta" id="header-meta"></p>
+        </header>
+
+        <div class="settings-panels">
+          <section class="settings-panel is-active" id="panel-general">
+            <section class="settings-group">
+              <div class="settings-group-heading">
+                <h3>键盘快捷键</h3>
+                <p>保持轻量直接的使用方式，只保留当前真正可用的主热键。</p>
+              </div>
+
+              <label class="settings-row">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">语音输入</span>
+                  <span class="settings-row-description">按一下开始录音，再按一下开始转写。</span>
+                </div>
+                <div class="settings-row-control settings-select-wrap">
+                  <select id="hotkey" data-setting="hotkey"></select>
+                </div>
+              </label>
+
+              <label class="settings-row">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">翻译输入</span>
+                  <span class="settings-row-description">按一下开始录音，再按一下把中文翻成目标语言并回填。</span>
+                </div>
+                <div class="settings-row-control settings-select-wrap">
+                  <select id="translate_hotkey" data-setting="translate_hotkey"></select>
+                </div>
+              </label>
+            </section>
+
+            <section class="settings-group">
+              <div class="settings-group-heading">
+                <h3>音频</h3>
+                <p>选择用于语音输入的麦克风和本地识别模型。</p>
+              </div>
+
+              <label class="settings-row">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">麦克风</span>
+                  <span class="settings-row-description">默认使用自动检测，也可以固定到某个实体设备。</span>
+                </div>
+                <div class="settings-row-control settings-select-wrap">
+                  <select id="microphone_id" data-setting="microphone_id"></select>
+                </div>
+              </label>
+
+              <label class="settings-row settings-row-stack" id="model-path-row">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">模型路径</span>
+                  <span class="settings-row-description">配置 sherpa-onnx SenseVoice 模型路径（包含 model.int8.onnx 和 tokens.txt）。</span>
+                </div>
+                <div class="settings-row-control settings-textarea-wrap">
+                  <textarea id="model_path" data-setting="model_path" rows="2" placeholder="/path/to/sherpa-onnx-sense-voice"></textarea>
+                </div>
+              </label>
+            </section>
+
+            <section class="settings-group">
+              <div class="settings-group-heading">
+                <h3>应用行为</h3>
+                <p>这些选项都直接作用于本机行为，不依赖网络服务。</p>
+              </div>
+
+              <label class="settings-row">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">识别模式</span>
+                  <span class="settings-row-description">默认是整段识别；流式输出会在录音过程中按短句持续输出文本，配合自动回填时会直接边说边出字。</span>
+                </div>
+                <div class="settings-row-control settings-select-wrap">
+                  <select id="recognition_mode" data-setting="recognition_mode">
+                    <option value="non_streaming">非流式</option>
+                    <option value="streaming_output">流式输出</option>
+                  </select>
+                </div>
+              </label>
+
+              <label class="settings-row">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">翻译语言</span>
+                  <span class="settings-row-description">翻译流程默认按“中文 -> 目标语言”。当前支持英语、日语、德语，粤语为实验性；仅非流式模式可用。</span>
+                </div>
+                <div class="settings-row-control settings-select-wrap">
+                  <select id="translation_target_language" data-setting="translation_target_language">
+                    <option value="en">英语</option>
+                    <option value="ja">日语</option>
+                    <option value="de">德语</option>
+                    <option value="yue">粤语（实验性）</option>
+                  </select>
+                </div>
+              </label>
+
+              <label class="settings-row">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">计算后端</span>
+                  <span class="settings-row-description">自动优先尝试 GPU，加速不可用时会回退到 CPU。</span>
+                </div>
+                <div class="settings-row-control settings-select-wrap">
+                  <select id="compute_backend" data-setting="compute_backend">
+                    <option value="auto">自动</option>
+                    <option value="gpu">GPU 优先</option>
+                    <option value="cpu">仅 CPU</option>
+                  </select>
+                </div>
+              </label>
+
+              <label class="settings-row settings-row-stack">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">自定义词典</span>
+                  <span class="settings-row-description">每行一条，格式为 `原词 => 替换词`。用于品牌名、术语和常见纠错。</span>
+                </div>
+                <div class="settings-row-control settings-textarea-wrap">
+                  <textarea id="custom_dictionary" data-setting="custom_dictionary" rows="5" placeholder="typo type => typetype"></textarea>
+                </div>
+              </label>
+
+              <label class="settings-row settings-row-toggle">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">自动回填到输入框</span>
+                  <span class="settings-row-description">转写完成后尝试切回之前的应用并自动粘贴。</span>
+                </div>
+                <span class="settings-switch">
+                  <input type="checkbox" id="auto_paste" data-setting="auto_paste" />
+                  <span class="settings-switch-ui"></span>
+                </span>
+              </label>
+
+              <label class="settings-row settings-row-toggle">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">开机自动启动</span>
+                  <span class="settings-row-description">系统登录后自动在后台启动并常驻托盘，不主动弹出设置窗口。</span>
+                </div>
+                <span class="settings-switch">
+                  <input type="checkbox" id="launch_at_login" data-setting="launch_at_login" />
+                  <span class="settings-switch-ui"></span>
+                </span>
+              </label>
+
+            </section>
+          </section>
+
+          <section class="settings-panel" id="panel-permissions">
+            <section class="settings-group">
+              <div class="settings-group-heading">
+                <h3>系统权限</h3>
+                <p id="permissions-summary">typetype 只依赖本机权限完成录音、全局快捷键触发和自动回填。</p>
+              </div>
+
+              <div class="settings-row" id="microphone-settings-row">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">麦克风权限</span>
+                  <span class="settings-row-description">允许应用采集麦克风音频。</span>
+                </div>
+                <button type="button" class="settings-secondary-button" id="microphone-settings-button">打开设置</button>
+              </div>
+
+              <div class="settings-row" id="accessibility-settings-row">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">辅助功能</span>
+                  <span class="settings-row-description">用于回到原应用并执行自动粘贴。</span>
+                </div>
+                <button type="button" class="settings-secondary-button" id="accessibility-button">打开设置</button>
+              </div>
+
+              <div class="settings-row" id="input-monitoring-settings-row">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">输入监听</span>
+                  <span class="settings-row-description">用于全局快捷键触发录音。</span>
+                </div>
+                <button type="button" class="settings-secondary-button" id="input-monitoring-button">打开设置</button>
+              </div>
+            </section>
+          </section>
+
+          <section class="settings-panel" id="panel-about">
+            <section class="settings-group">
+              <div class="settings-group-heading">
+                <h3>应用信息</h3>
+                <p>离线优先，不依赖用户体系和云端模型下载。</p>
+              </div>
+
+              <div class="settings-row">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">版本</span>
+                  <span class="settings-row-description" id="app-version">-</span>
+                </div>
+              </div>
+
+              <div class="settings-row">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">内置模型</span>
+                  <span class="settings-row-description" id="model-label">-</span>
+                </div>
+                <span class="settings-chip" id="model-status">-</span>
+              </div>
+
+              <div class="settings-row">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">当前模式</span>
+                  <span class="settings-row-description" id="runtime-mode-label">-</span>
+                </div>
+              </div>
+
+              <div class="settings-row">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">实际后端</span>
+                  <span class="settings-row-description" id="compute-backend-label">-</span>
+                </div>
+              </div>
+
+              <div class="settings-row">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">模型目录</span>
+                  <span class="settings-row-description" id="model-path-label">-</span>
+                </div>
+              </div>
+
+              <div class="settings-row">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">日志目录</span>
+                  <span class="settings-row-description" id="log-path">-</span>
+                </div>
+                <button type="button" class="settings-secondary-button" id="open-logs-button">打开目录</button>
+              </div>
+
+              <div class="settings-row">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">ASR 自检</span>
+                  <span class="settings-row-description">用当前保存的模式、模型和后端配置做一次实际加载验证。</span>
+                </div>
+                <button type="button" class="settings-secondary-button" id="asr-diagnostics-button">运行自检</button>
+              </div>
+
+              <div class="settings-row settings-row-stack">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">诊断详情</span>
+                  <span class="settings-row-description">可直接复制发给开发者，用于排查模型路径、模式和 GPU 加载问题。</span>
+                </div>
+                <div class="settings-row-control settings-textarea-wrap">
+                  <textarea id="asr-diagnostics-output" rows="8" readonly placeholder="运行 ASR 自检后会在这里显示详细结果。"></textarea>
+                </div>
+                <div class="settings-inline-actions">
+                  <button type="button" class="settings-secondary-button" id="copy-asr-diagnostics-button">复制诊断</button>
+                </div>
+              </div>
+
+              <div class="settings-row">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">反馈问题</span>
+                  <span class="settings-row-description">直接通过邮件反馈当前问题和日志。</span>
+                </div>
+                <button type="button" class="settings-secondary-button" id="feedback-button">发送反馈</button>
+              </div>
+            </section>
+          </section>
+
+          <section class="settings-panel" id="panel-help">
+            <section class="settings-group">
+              <div class="settings-group-heading">
+                <h3>帮助中心</h3>
+                <p>当前版本重点是"按一下开始录音，再按一下开始转写，成功后自动回填"。</p>
+              </div>
+
+              <div class="settings-copy-block">
+                <p>1. macOS 默认热键是 <strong>Option+/</strong>，Windows 是 <strong>F8</strong>。</p>
+                <p>2. 按一下开始录音，再按一下开始转写。</p>
+                <p>3. 识别完成后会先写入剪贴板，再尝试自动回填到之前的输入框。</p>
+                <p>4. 如果快捷键没有反应，优先检查对应系统权限；如果不会自动回填，优先检查辅助功能权限。</p>
+              </div>
+            </section>
+          </section>
+
+        </div>
+
+        <footer class="settings-footer">
+          <p class="status-note" id="save-status">正在加载设置…</p>
+        </footer>
+      </section>
+    </main>
+
+    <script type="module" src="./settings.js"></script>
+  </body>
+</html>
