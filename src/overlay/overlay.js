@@ -7,8 +7,8 @@ const thinkingShellEl = document.querySelector("#thinking-shell");
 const stopShellEl = document.querySelector("#stop-shell");
 const thinkingLabelEl = document.querySelector("#thinking-label");
 const stopLabelEl = document.querySelector("#stop-label");
-const MORPH_STATES = new Set(["recording", "transcribing", "translating", "stopped"]);
-const VISIBLE_STATES = new Set(["recording", "transcribing", "translating", "stopped"]);
+const MORPH_STATES = new Set(["recording", "transcribing", "polishing", "translating", "stopped"]);
+const VISIBLE_STATES = new Set(["recording", "transcribing", "polishing", "translating", "stopped"]);
 const EXIT_HOLD_MS = 150;
 let animationTick = 0;
 let exitTimer = null;
@@ -79,7 +79,7 @@ function applyState(snapshot) {
 
   const activeState = nextVisible ? nextState : lastVisibleState;
   const recording = activeState === "recording";
-  const thinking = activeState === "transcribing" || activeState === "translating";
+  const thinking = activeState === "transcribing" || activeState === "polishing" || activeState === "translating";
   const stopped = activeState === "stopped";
 
   recordingShellEl.hidden = !recording;
@@ -90,7 +90,15 @@ function applyState(snapshot) {
   thinkingShellEl.setAttribute("aria-hidden", String(!thinking));
   stopShellEl.setAttribute("aria-hidden", String(!stopped));
   if (thinkingLabelEl) {
-    thinkingLabelEl.textContent = snapshot.detail || (activeState === "translating" ? "Translating" : "Transcribing");
+    if (snapshot.detail) {
+      thinkingLabelEl.textContent = snapshot.detail;
+    } else if (activeState === "translating") {
+      thinkingLabelEl.textContent = "Translating";
+    } else if (activeState === "polishing") {
+      thinkingLabelEl.textContent = "Polishing";
+    } else {
+      thinkingLabelEl.textContent = "Transcribing";
+    }
   }
   if (stopLabelEl) {
     stopLabelEl.textContent = snapshot.detail || "Stop";

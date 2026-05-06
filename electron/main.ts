@@ -29,6 +29,7 @@ import { initializeAsrEngine } from './asr-bootstrap';
 import { cleanupTranscript } from './transcript-cleanup';
 import { TranslationEngine } from './translation-engine';
 import { getTranslationLanguageDefinition, translationSupportsRecognitionMode } from './translation-model-registry';
+import { LlmRewriteEngine, testLlmConnection } from './llm-rewrite';
 
 const FEEDBACK_EMAIL = 'feedback@typetype.app';
 
@@ -160,7 +161,8 @@ class TypenewApp {
       () => this.openFeedbackEmail(),
       () => this.runAsrDiagnostics(),
       () => this.startRecording(),
-      () => this.stopRecording()
+      () => this.stopRecording(),
+      (config) => testLlmConnection(config)
     );
   }
 
@@ -669,10 +671,13 @@ class TypenewApp {
       throw new Error('翻译输入暂只支持非流式模式。');
     }
 
-    // Capture frontmost app for auto-paste
-    const bundleId = await this.autoPaste.captureFrontmostApp();
-    this.previousAppBundleId = bundleId;
+    // Capture frontmost app asynchronously - don't block recording start
     this.activeCaptureIntent = intent;
+    void this.autoPaste.captureFrontmostApp().then((bundleId) => {
+      this.previousAppBundleId = bundleId;
+    }).catch(() => {
+      // Ignore capture errors - use whatever previousAppBundleId we already have
+    });
 
     try {
       this.streamingSessionId += 1;
@@ -869,9 +874,13 @@ class TypenewApp {
         text: cleanedTranscript,
       });
 
-      const finalText = this.activeCaptureIntent === 'translation'
-        ? await this.translateTranscript(cleanedTranscript)
-        : this.stateMachine.finishOutput(cleanedTranscript);
+      let finalText: string;
+      if (this.activeCaptureIntent === 'translation') {
+        finalText = await this.translateTranscript(cleanedTranscript);
+      } else {
+        finalText = await this.rewriteWithLlm(cleanedTranscript) || cleanedTranscript;
+        finalText = this.stateMachine.finishOutput(finalText);
+      }
       console.log('[translation-debug] final-output', {
         intent: this.activeCaptureIntent,
         text: finalText,
@@ -944,6 +953,33 @@ class TypenewApp {
     });
 
     return this.stateMachine.finishOutput(translated);
+  }
+
+  private async rewriteWithLlm(text: string): Promise<string | null> {
+    const settings = this.settingsStore.getSettings();
+    if (!settings.llm_rewrite?.enabled) {
+      return null;
+    }
+
+    if (!settings.llm_rewrite.api_key) {
+      console.log('[llm-rewrite] skipped: no API key configured');
+      return null;
+    }
+
+    this.stateMachine.beginPolishing();
+    this.updateTrayAnimation();
+    this.publishSnapshot();
+
+    try {
+      const engine = new LlmRewriteEngine(settings.llm_rewrite);
+      const result = await engine.rewrite(text);
+      console.log('[llm-rewrite] success', { original: text, polished: result.polished_text });
+      return result.polished_text;
+    } catch (e) {
+      console.error('[llm-rewrite] failed:', e);
+      // 降级使用原始转写文本
+      return null;
+    }
   }
 
   private handleRecordingSamples(samples: Float32Array): void {

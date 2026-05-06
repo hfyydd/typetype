@@ -15,6 +15,16 @@ const translationTargetLanguageSelect = document.querySelector("#translation_tar
 const customDictionaryTextarea = document.querySelector("#custom_dictionary");
 const modelPathTextarea = document.querySelector("#model_path");
 
+// LLM rewrite settings
+const llmEnabledToggle = document.querySelector("#llm_enabled");
+const llmConfigPanel = document.querySelector("#llm-config-panel");
+const llmProviderSelect = document.querySelector("#llm_provider");
+const llmBaseUrlInput = document.querySelector("#llm_base_url");
+const llmApiKeyInput = document.querySelector("#llm_api_key");
+const llmModelInput = document.querySelector("#llm_model");
+const llmTestButton = document.querySelector("#llm-test-button");
+const llmTestStatus = document.querySelector("#llm-test-status");
+
 const panelTitle = document.querySelector("#panel-title");
 const panelKicker = document.querySelector("#panel-kicker");
 const headerMeta = document.querySelector("#header-meta");
@@ -113,6 +123,17 @@ function fillSettingsView(view) {
   modelPathTextarea.value = view.settings.model_path ?? "";
   populateMicrophoneSelect(view.microphones, view.settings.microphone_id);
 
+  // LLM rewrite settings
+  const llmRewrite = view.settings.llm_rewrite ?? {};
+  llmEnabledToggle.checked = llmRewrite.enabled ?? false;
+  llmProviderSelect.value = llmRewrite.provider ?? "openai";
+  llmBaseUrlInput.value = llmRewrite.base_url ?? "https://api.openai.com/v1";
+  llmApiKeyInput.value = llmRewrite.api_key ?? "";
+  llmModelInput.value = llmRewrite.model ?? "gpt-4o-mini";
+  setVisible(llmConfigPanel, llmRewrite.enabled);
+  llmTestStatus.textContent = "";
+  llmTestStatus.dataset.tone = "";
+
   setVisible(permissionsNavItem, view.show_permissions_panel);
   setVisible(microphoneSettingsRow, view.show_microphone_settings);
   setVisible(accessibilitySettingsRow, view.show_accessibility_settings);
@@ -152,6 +173,15 @@ function collectSettings() {
     model_path: modelPathTextarea.value || null,
     pinned_model_version: currentSettings?.pinned_model_version ?? "sherpa-onnx-sense-voice",
     custom_dictionary: parseDictionary(customDictionaryTextarea.value),
+    llm_rewrite: {
+      enabled: llmEnabledToggle.checked,
+      provider: llmProviderSelect.value,
+      api_key: llmApiKeyInput.value,
+      base_url: llmBaseUrlInput.value,
+      model: llmModelInput.value,
+      temperature: currentSettings?.llm_rewrite?.temperature ?? 0.3,
+      max_tokens: currentSettings?.llm_rewrite?.max_tokens ?? 4096,
+    },
   };
 }
 
@@ -260,8 +290,13 @@ for (const element of [
   recognitionModeSelect,
   computeBackendSelect,
   translationTargetLanguageSelect,
+  llmEnabledToggle,
+  llmProviderSelect,
 ]) {
   element.addEventListener("change", () => {
+    if (element === llmEnabledToggle) {
+      setVisible(llmConfigPanel, llmEnabledToggle.checked);
+    }
     cancelScheduledSave();
     void persistSettings();
   });
@@ -290,6 +325,44 @@ modelPathTextarea.addEventListener("blur", () => {
   cancelScheduledSave();
   void persistSettings();
 });
+
+llmTestButton.addEventListener("click", async () => {
+  llmTestStatus.textContent = "测试中...";
+  llmTestStatus.dataset.tone = "";
+  try {
+    const config = {
+      enabled: llmEnabledToggle.checked,
+      provider: llmProviderSelect.value,
+      api_key: llmApiKeyInput.value,
+      base_url: llmBaseUrlInput.value,
+      model: llmModelInput.value,
+      temperature: 0.3,
+      max_tokens: 4096,
+    };
+    const result = await electronAPI.testLlmConnection(config);
+    if (result.ok) {
+      llmTestStatus.textContent = `连接成功 (${result.latency_ms}ms)`;
+      llmTestStatus.dataset.tone = "default";
+    } else {
+      llmTestStatus.textContent = `失败: ${result.error}`;
+      llmTestStatus.dataset.tone = "error";
+    }
+  } catch (e) {
+    llmTestStatus.textContent = `失败: ${e.message}`;
+    llmTestStatus.dataset.tone = "error";
+  }
+});
+
+for (const input of [llmBaseUrlInput, llmApiKeyInput, llmModelInput]) {
+  input.addEventListener("input", () => {
+    if (isHydrating) {
+      return;
+    }
+    llmTestStatus.textContent = "";
+    llmTestStatus.dataset.tone = "";
+    schedulePersistSettings();
+  });
+}
 
 document.querySelector("#microphone-settings-button").addEventListener("click", () => {
   runAction("openMicrophoneSettings", "已打开麦克风权限设置。");

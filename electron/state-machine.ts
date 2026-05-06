@@ -80,6 +80,13 @@ export class StateMachine {
     this.waveform = [];
   }
 
+  beginPolishing(): void {
+    this.status = 'polishing';
+    this.detail = 'Polishing';
+    this.recordingStartedAt = null;
+    this.waveform = [];
+  }
+
   stopTranscribing(): void {
     this.status = 'stopped';
     this.detail = 'Stopped';

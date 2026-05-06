@@ -58,11 +58,11 @@ export class AudioRecorder {
 
   private startSoxRecording(): void {
     // macOS: use sox to record from default audio device
-    // sox -t coreaudio default -r 16000 -b 16 -c 1 -t raw -
     this.audioBuffer = [];
     this.process = spawn('sox', [
       '-q',
-      ...buildSoxInputArgs(this.microphoneId),
+      '-t', 'coreaudio',
+      this.microphoneId || 'default',
       '-r', '16000',
       '-b', '16',
       '-c', '1',
@@ -107,6 +107,7 @@ export class AudioRecorder {
       throw new Error('No recording in progress');
     }
 
+    // Kill the process first to stop data collection
     if (this.process) {
       this.process.kill();
       this.process = null;

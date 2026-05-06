@@ -176,6 +176,74 @@
               </label>
 
             </section>
+
+            <section class="settings-group">
+              <div class="settings-group-heading">
+                <h3>LLM 润写</h3>
+                <p>调用 LLM API 优化语音转写结果，使其更流畅通顺。</p>
+              </div>
+
+              <label class="settings-row settings-row-toggle">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">启用 LLM 润写</span>
+                  <span class="settings-row-description">关闭时直接输出转写文本，不调用 LLM。</span>
+                </div>
+                <span class="settings-switch">
+                  <input type="checkbox" id="llm_enabled" data-setting="llm_enabled" />
+                  <span class="settings-switch-ui"></span>
+                </span>
+              </label>
+
+              <div id="llm-config-panel" class="llm-config-panel" hidden>
+                <label class="settings-row">
+                  <div class="settings-row-copy">
+                    <span class="settings-row-title">提供商</span>
+                  </div>
+                  <div class="settings-row-control settings-select-wrap">
+                    <select id="llm_provider" data-setting="llm_provider">
+                      <option value="openai">OpenAI (GPT)</option>
+                      <option value="anthropic">Anthropic (Claude)</option>
+                      <option value="compatible">兼容模式（Base URL 自定义）</option>
+                    </select>
+                  </div>
+                </label>
+
+                <label class="settings-row settings-row-stack">
+                  <div class="settings-row-copy">
+                    <span class="settings-row-title">Base URL</span>
+                    <span class="settings-row-description">API 地址。OpenAI 为 https://api.openai.com/v1，Claude 为 https://api.anthropic.com</span>
+                  </div>
+                  <div class="settings-row-control settings-input-wrap">
+                    <input type="text" id="llm_base_url" data-setting="llm_base_url" placeholder="https://api.openai.com/v1" />
+                  </div>
+                </label>
+
+                <label class="settings-row settings-row-stack">
+                  <div class="settings-row-copy">
+                    <span class="settings-row-title">API Key</span>
+                    <span class="settings-row-description">密钥本地存储，不上传。</span>
+                  </div>
+                  <div class="settings-row-control settings-input-wrap">
+                    <input type="password" id="llm_api_key" data-setting="llm_api_key" placeholder="sk-..." />
+                  </div>
+                </label>
+
+                <label class="settings-row settings-row-stack">
+                  <div class="settings-row-copy">
+                    <span class="settings-row-title">模型</span>
+                    <span class="settings-row-description">如 gpt-4o-mini、claude-3-5-haiku-20241022</span>
+                  </div>
+                  <div class="settings-row-control settings-input-wrap">
+                    <input type="text" id="llm_model" data-setting="llm_model" placeholder="gpt-4o-mini" />
+                  </div>
+                </label>
+
+                <div class="settings-row">
+                  <button type="button" id="llm-test-button" class="settings-secondary-button">测试连接</button>
+                  <span id="llm-test-status" class="settings-row-description" style="margin-left: 12px;"></span>
+                </div>
+              </div>
+            </section>
           </section>
 
           <section class="settings-panel" id="panel-permissions">

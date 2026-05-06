@@ -2,6 +2,21 @@ export type RecognitionMode = 'non_streaming' | 'streaming_output';
 export type ComputeBackend = 'auto' | 'cpu' | 'gpu';
 export type TranslationTargetLanguage = 'en' | 'ja' | 'de' | 'yue';
 export type CaptureIntent = 'dictation' | 'translation';
+export type LlmProvider = 'openai' | 'anthropic' | 'compatible';
+
+export interface LlmRewriteConfig {
+  enabled: boolean;
+  provider: LlmProvider;
+  api_key: string;
+  base_url: string;
+  model: string;
+  temperature: number;
+  max_tokens: number;
+}
+
+export interface LlmRewriteResponse {
+  polished_text: string;
+}
 
 export interface Settings {
   hotkey: string;
@@ -15,6 +30,7 @@ export interface Settings {
   custom_dictionary: Array<{ from: string; to: string }>;
   model_path: string | null;
   pinned_model_version: string;
+  llm_rewrite: LlmRewriteConfig;
 }
 
 export interface HotkeyOption {
@@ -65,4 +81,4 @@ export interface AsrDiagnostics {
   message: string;
 }
 
-export type RuntimeStatus = 'idle' | 'recording' | 'transcribing' | 'translating' | 'stopped' | 'done';
+export type RuntimeStatus = 'idle' | 'recording' | 'transcribing' | 'polishing' | 'translating' | 'stopped' | 'done';

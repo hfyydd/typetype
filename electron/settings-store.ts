@@ -36,6 +36,15 @@ export class SettingsStore {
       custom_dictionary: [],
       model_path: null,
       pinned_model_version: 'sherpa-onnx-sense-voice',
+      llm_rewrite: {
+        enabled: false,
+        provider: 'openai',
+        api_key: '',
+        base_url: 'https://api.openai.com/v1',
+        model: 'gpt-4o-mini',
+        temperature: 0.3,
+        max_tokens: 4096,
+      },
     };
   }
 

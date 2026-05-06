@@ -269,6 +269,18 @@ body {
   box-shadow: 0 1px 0 rgba(24, 33, 43, 0.02);
 }
 
+.settings-input-wrap input {
+  width: min(520px, 100%);
+  border-radius: 14px;
+  border: 1px solid rgba(24, 33, 43, 0.1);
+  padding: 10px 12px;
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  box-shadow: 0 1px 0 rgba(24, 33, 43, 0.02);
+}
+
 .settings-textarea-wrap textarea {
   width: min(520px, 100%);
   min-height: 112px;
