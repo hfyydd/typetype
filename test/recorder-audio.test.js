@@ -19,6 +19,15 @@ test("downsampleTo16k converts higher-rate mono audio to 16kHz", async () => {
   assert.equal(output[0], 0.5);
 });
 
+test("normalizePcmChunkTo16k prepares streaming recorder chunks for ASR", async () => {
+  const { normalizePcmChunkTo16k } = await loadModule();
+  const input = new Float32Array(960).fill(0.25);
+  const output = normalizePcmChunkTo16k(input, 48000);
+
+  assert.equal(output.length, 320);
+  assert.equal(output[0], 0.25);
+});
+
 test("buildWaveform returns the requested number of bars", async () => {
   const { buildWaveform } = await loadModule();
   const data = new Uint8Array(128).fill(255);

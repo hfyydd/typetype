@@ -1,4 +1,4 @@
-import { buildWaveform, downsampleTo16k } from "./audio-processing.js";
+import { buildWaveform, downsampleTo16k, normalizePcmChunkTo16k } from "./audio-processing.js";
 import { buildAudioConstraints } from "./device-constraints.js";
 import { concatFloat32Chunks } from "./pcm-buffer.js";
 import { isPcmChunkMessage } from "./pcm-message.js";
@@ -16,8 +16,31 @@ let pcmChunks = [];
 let pendingPcmChunks = [];
 let captureModulePromise = null;
 let chunkFlushTimer = null;
+let workletBlobUrl = null;
+let lastAudioContextState = null;
 
 const PCM_CHUNK_FLUSH_MS = 180;
+
+const PCM_CAPTURE_PROCESSOR_CODE = `
+class PcmCaptureProcessor extends AudioWorkletProcessor {
+  process(inputs) {
+    const input = inputs[0];
+    const channel = input?.[0];
+    if (channel?.length) {
+      this.port.postMessage({ type: "pcm-chunk", samples: channel.slice() });
+    }
+    return true;
+  }
+}
+registerProcessor("pcm-capture-processor", PcmCaptureProcessor);
+`;
+
+function revokeWorkletBlob() {
+  if (workletBlobUrl) {
+    URL.revokeObjectURL(workletBlobUrl);
+    workletBlobUrl = null;
+  }
+}
 
 function stopWaveformLoop() {
   if (waveformTimer) {
@@ -64,9 +87,17 @@ function cleanupStream() {
     silentGainNode = null;
   }
 
+  if (audioContext && audioContext.state !== "closed") {
+    audioContext.close().catch(() => {});
+  }
+  audioContext = null;
+  lastAudioContextState = null;
+
   analyser = null;
   pcmChunks = [];
   pendingPcmChunks = [];
+  captureModulePromise = null;
+  revokeWorkletBlob();
 }
 
 function flushPendingChunkSamples() {
@@ -76,7 +107,9 @@ function flushPendingChunkSamples() {
 
   const samples = concatFloat32Chunks(pendingPcmChunks);
   pendingPcmChunks = [];
-  recorderAPI.sendChunk(samples.buffer);
+  const sampleRate = audioContext?.sampleRate ?? 16000;
+  const samples16k = normalizePcmChunkTo16k(samples, sampleRate);
+  recorderAPI.sendChunk(samples16k.buffer);
 }
 
 async function ensureAudioContext() {
@@ -85,7 +118,19 @@ async function ensureAudioContext() {
   }
 
   if (audioContext.state === "suspended") {
-    await audioContext.resume();
+    try {
+      await audioContext.resume();
+    } catch (e) {
+      // Try closing and recreating
+      try { await audioContext.close(); } catch {}
+      audioContext = new AudioContext();
+    }
+  }
+
+  if (audioContext.state === "suspended") {
+    // Still suspended - try a new context
+    try { await audioContext.close(); } catch {}
+    audioContext = new AudioContext();
   }
 
   return audioContext;
@@ -96,10 +141,13 @@ async function ensureCaptureModule(context) {
     return false;
   }
 
+  if (!workletBlobUrl) {
+    const blob = new Blob([PCM_CAPTURE_PROCESSOR_CODE], { type: "application/javascript" });
+    workletBlobUrl = URL.createObjectURL(blob);
+  }
+
   if (!captureModulePromise) {
-    captureModulePromise = context.audioWorklet.addModule(
-      new URL("./pcm-capture-processor.js", import.meta.url).href
-    );
+    captureModulePromise = context.audioWorklet.addModule(workletBlobUrl);
   }
 
   try {
@@ -177,11 +225,45 @@ async function startRecording(microphoneId = null) {
       flushPendingChunkSamples();
     }, PCM_CHUNK_FLUSH_MS);
 
+    // Wait for audio processing to actually produce samples before signaling ready
+    // This ensures WebAudio pipeline is fully operational
+    await waitForAudioProcessing(context);
     recorderAPI.sendStarted();
   } catch (error) {
     cleanupStream();
     recorderAPI.sendError(error instanceof Error ? error.message : String(error));
   }
+}
+
+async function waitForAudioProcessing(context, timeoutMs = 2000) {
+  return new Promise((resolve) => {
+    const startTime = Date.now();
+    const initialPcmLength = pcmChunks.length;
+    let resolved = false;
+
+    function check() {
+      if (resolved) return;
+
+      const elapsed = Date.now() - startTime;
+      if (pcmChunks.length > initialPcmLength) {
+        resolved = true;
+        resolve(true);
+        return;
+      }
+
+      if (elapsed >= timeoutMs) {
+        resolved = true;
+        console.warn("Timeout waiting for audio processing");
+        resolve(true); // Still resolve true to not block recording
+        return;
+      }
+
+      setTimeout(check, 50);
+    }
+
+    // Start checking after a small delay to let audio pipeline initialize
+    setTimeout(check, 100);
+  });
 }
 
 async function stopRecording() {

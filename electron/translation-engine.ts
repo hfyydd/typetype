@@ -115,6 +115,7 @@ export class TranslationEngine {
       process.stdout.write(chunk);
     });
     this.worker.stderr?.on('data', (chunk) => {
+      console.error('[translation-debug] worker-stderr', chunk.toString().trim());
       process.stderr.write(chunk);
     });
     this.worker.on('message', (message: TranslationWorkerResponse) => {
@@ -175,6 +176,11 @@ export class TranslationEngine {
       return configured;
     }
 
+    if (this.isPackagedAsarRuntime()) {
+      this.resolvedNodeExecPath = process.execPath;
+      return process.execPath;
+    }
+
     const command = process.platform === 'win32' ? 'where' : 'which';
     const lookup = spawnSync(command, ['node'], {
       encoding: 'utf8',
@@ -192,5 +198,9 @@ export class TranslationEngine {
 
     this.resolvedNodeExecPath = process.execPath;
     return process.execPath;
+  }
+
+  private isPackagedAsarRuntime(): boolean {
+    return this.appPath.endsWith('app.asar') || __dirname.includes('.asar');
   }
 }
