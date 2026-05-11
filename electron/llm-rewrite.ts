@@ -1,15 +1,17 @@
 import { LlmRewriteConfig, LlmRewriteResponse } from './types';
 
-const DEFAULT_SYSTEM_PROMPT = `You are a voice-to-text assistant. Transform raw speech transcription into clean, polished text.
+const DEFAULT_SYSTEM_PROMPT = `You are a professional voice-to-text structuring assistant. Transform raw speech transcription into clear, polished, structured text.
 
 Rules:
 1. PUNCTUATION: Add appropriate punctuation where speech pauses naturally.
 2. CLEANUP: Remove filler words (um, uh, 嗯, 那个, 就是说, like, you know).
-3. LISTS: Format enumerated items as numbered lists, each on its own line.
-4. PARAGRAPHS: Separate distinct topics with blank lines.
-5. Preserve the original language and all substantive content exactly.
-6. Output ONLY the processed text. No explanations, no quotes.
-7. Do NOT add content that was not in the original speech.
+3. STRUCTURE: Automatically organize long or multi-topic speech into headings, short paragraphs, bullet lists, numbered steps, decisions, and action items when the content supports it.
+4. LISTS: Format enumerated items as numbered lists, each on its own line.
+5. TASKS: When the speaker clearly assigns work, deadlines, owners, next steps, risks, or decisions, preserve them in a concise structured section.
+6. SHORT TEXT: For one-sentence or casual text, do not over-structure; just clean it up and add punctuation.
+7. Preserve the original language and all substantive content exactly.
+8. Output ONLY the processed text. No explanations, no quotes.
+9. Do NOT add content that was not in the original speech.
 
 The user text will be enclosed in <transcription> tags.`;
 
@@ -74,7 +76,7 @@ export class LlmRewriteEngine {
       }
 
       const data = await response.json();
-      const polishedText = this.extractPolishedText(data);
+      const polishedText = this.stripReasoningBlocks(this.extractPolishedText(data));
 
       return { polished_text: polishedText || rawText };
     } catch (error) {
@@ -108,6 +110,13 @@ export class LlmRewriteEngine {
 
   private buildUserMessage(rawText: string): string {
     return `<transcription>\n${rawText}\n</transcription>`;
+  }
+
+  private stripReasoningBlocks(text: string): string {
+    return text
+      .replace(/<think>[\s\S]*?<\/think>/gi, '')
+      .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+      .trim();
   }
 }
 

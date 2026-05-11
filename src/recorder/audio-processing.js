@@ -36,6 +36,18 @@ export function downsampleTo16k(input, sampleRate) {
   return output;
 }
 
+export function normalizePcmChunkTo16k(input, sampleRate) {
+  if (!(input instanceof Float32Array)) {
+    throw new TypeError("input must be a Float32Array");
+  }
+
+  if (input.length === 0) {
+    return input.slice();
+  }
+
+  return downsampleTo16k(input, sampleRate);
+}
+
 export function buildWaveform(timeDomainData, bars = 9) {
   if (!timeDomainData?.length || bars <= 0) {
     return [];

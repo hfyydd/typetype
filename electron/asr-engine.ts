@@ -71,6 +71,58 @@ interface AsrEngineOptions {
   recognitionMode?: RecognitionMode;
 }
 
+function getModelFilesFromDirectory(modelDirectory: string): ModelFiles | null {
+  const modelCandidates = [
+    path.join(modelDirectory, 'model.int8.onnx'),
+    path.join(modelDirectory, 'model.onnx'),
+  ];
+
+  for (const modelCandidate of modelCandidates) {
+    if (!fs.existsSync(modelCandidate)) {
+      continue;
+    }
+
+    const tokensCandidate = path.join(modelDirectory, 'tokens.txt');
+    if (!fs.existsSync(tokensCandidate)) {
+      continue;
+    }
+
+    const bpeVocabPath = path.join(modelDirectory, 'bbpe.model');
+    return {
+      modelPath: modelCandidate,
+      tokensPath: tokensCandidate,
+      bpeVocabPath: fs.existsSync(bpeVocabPath) ? bpeVocabPath : null,
+    };
+  }
+
+  return null;
+}
+
+function isModelDirectoryCompatible(
+  modelDirectory: string,
+  recognitionMode?: RecognitionMode
+): boolean {
+  if (!recognitionMode) {
+    return true;
+  }
+
+  const directoryName = path.basename(modelDirectory).toLowerCase();
+  const hasBpeVocab = fs.existsSync(path.join(modelDirectory, 'bbpe.model'));
+  const looksStreaming =
+    directoryName.includes('streaming') ||
+    directoryName.includes('zipformer') ||
+    hasBpeVocab;
+  const looksOffline =
+    directoryName.includes('sense-voice') ||
+    directoryName.includes('sense_voice');
+
+  if (recognitionMode === 'streaming_output') {
+    return !looksOffline;
+  }
+
+  return !looksStreaming;
+}
+
 function loadSherpaOnnxNode(): any {
   if (app?.isPackaged) {
     const unpackedEntry = path.join(
@@ -280,27 +332,16 @@ export class AsrEngine {
     return this.recognitionMode;
   }
 
-  static findModelPath(searchPaths: string[]): ModelFiles | null {
+  static findModelPath(searchPaths: string[], recognitionMode?: RecognitionMode): ModelFiles | null {
     for (const searchPath of searchPaths) {
-      if (fs.existsSync(searchPath)) {
-        const modelCandidates = [
-          path.join(searchPath, 'model.int8.onnx'),
-          path.join(searchPath, 'model.onnx'),
-        ];
+      if (!fs.existsSync(searchPath)) {
+        continue;
+      }
 
-        for (const modelCandidate of modelCandidates) {
-          if (fs.existsSync(modelCandidate)) {
-            const tokensCandidate = path.join(searchPath, 'tokens.txt');
-            if (fs.existsSync(tokensCandidate)) {
-              return {
-                modelPath: modelCandidate,
-                tokensPath: tokensCandidate,
-                bpeVocabPath: fs.existsSync(path.join(searchPath, 'bbpe.model'))
-                  ? path.join(searchPath, 'bbpe.model')
-                  : null,
-              };
-            }
-          }
+      if (isModelDirectoryCompatible(searchPath, recognitionMode)) {
+        const modelFiles = getModelFilesFromDirectory(searchPath);
+        if (modelFiles) {
+          return modelFiles;
         }
       }
     }
@@ -309,11 +350,13 @@ export class AsrEngine {
       if (!fs.existsSync(searchPath)) continue;
 
       try {
-        const entries = fs.readdirSync(searchPath, { withFileTypes: true });
+        const entries = fs
+          .readdirSync(searchPath, { withFileTypes: true })
+          .sort((a, b) => a.name.localeCompare(b.name));
         for (const entry of entries) {
           if (entry.isDirectory()) {
             const subPath = path.join(searchPath, entry.name);
-            const result = AsrEngine.findModelPath([subPath]);
+            const result = AsrEngine.findModelPath([subPath], recognitionMode);
             if (result) return result;
           }
         }

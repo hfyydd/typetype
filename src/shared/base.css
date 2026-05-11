@@ -350,6 +350,29 @@ body {
   box-shadow: 0 1px 0 rgba(24, 33, 43, 0.02);
 }
 
+.settings-provider-guide {
+  display: grid;
+  gap: 5px;
+  margin: 4px 0 8px;
+  padding: 12px 14px;
+  border: 1px solid rgba(37, 99, 235, 0.12);
+  border-radius: 12px;
+  background: rgba(37, 99, 235, 0.045);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-provider-guide strong {
+  color: var(--text);
+}
+
+.settings-provider-guide code {
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
 .settings-chip {
   display: inline-flex;
   align-items: center;

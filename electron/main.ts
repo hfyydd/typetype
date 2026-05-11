@@ -9,6 +9,7 @@ import {
 } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
+import { spawnSync } from 'child_process';
 
 import { StateMachine } from './state-machine';
 import { SettingsStore } from './settings-store';
@@ -30,8 +31,15 @@ import { cleanupTranscript } from './transcript-cleanup';
 import { TranslationEngine } from './translation-engine';
 import { getTranslationLanguageDefinition, translationSupportsRecognitionMode } from './translation-model-registry';
 import { LlmRewriteEngine, testLlmConnection } from './llm-rewrite';
+import { StreamingSegmenter } from './streaming-segmentation';
+import { ensureStreamingFinalPunctuation, prefixStreamingBoundaryPunctuation } from './streaming-punctuation';
 
 const FEEDBACK_EMAIL = 'feedback@typetype.app';
+const WINDOWS_LOGIN_ITEM_NAME = 'typetype';
+const WINDOWS_LEGACY_LOGIN_ITEM_NAMES = [
+  'electron.app.Electron',
+  'electron.app.typetype',
+];
 
 class TypenewApp {
   private stateMachine: StateMachine;
@@ -48,10 +56,14 @@ class TypenewApp {
   private previousAppBundleId: string | null = null;
   private isQuitting = false;
   private asrInitializationPromise: Promise<void> | null = null;
+  private asrInitializationError: Error | null = null;
+  private isAsrInitializing = false;
   private pendingTranscriptionTimer: ReturnType<typeof setTimeout> | null = null;
   private transcriptionRunId = 0;
   private stopOverlayTimer: ReturnType<typeof setTimeout> | null = null;
   private recorderWindowReadyPromise: Promise<void> | null = null;
+  private translationAsrEngine: AsrEngine | null = null;
+  private translationAsrInitializationPromise: Promise<AsrEngine | null> | null = null;
   private pendingRecorderStart:
     | { resolve: () => void; reject: (error: Error) => void }
     | null = null;
@@ -60,9 +72,13 @@ class TypenewApp {
     | null = null;
   private recordingStopAllowedAt = 0;
   private streamingPastedText = '';
+  private streamingOutputText = '';
   private streamingLatestText = '';
   private streamingChunkQueue: Promise<void> = Promise.resolve();
   private streamingSessionId = 0;
+  private streamingChunkLogCount = 0;
+  private streamingSegmenter: StreamingSegmenter | null = null;
+  private streamingPendingBoundaryPunctuation = false;
   private activeCaptureIntent: CaptureIntent = 'dictation';
   private translationEngine: TranslationEngine;
 
@@ -414,11 +430,31 @@ class TypenewApp {
         console.error('Failed to start recording:', error);
       });
     } else if (status === 'recording' && canStopRecording(now, this.recordingStopAllowedAt)) {
-      this.activeCaptureIntent = intent;
+      this.applyStopIntent(intent);
       void this.stopRecording();
     } else if (status === 'transcribing' || status === 'translating') {
       this.stopThinking();
     }
+  }
+
+  private applyStopIntent(intent: CaptureIntent): void {
+    if (intent === this.activeCaptureIntent) {
+      return;
+    }
+
+    if (this.activeCaptureIntent === 'dictation' && intent === 'translation') {
+      if (this.shouldUseStreamingForActiveCapture()) {
+        this.cancelStreamingOutputSession('switch-to-translation');
+      }
+      this.activeCaptureIntent = 'translation';
+      console.log('Recording intent switched to translation');
+      return;
+    }
+
+    console.log('Ignoring stop intent switch while recording', {
+      active: this.activeCaptureIntent,
+      requested: intent,
+    });
   }
 
   private registerShortcutsForSettings(settings: Settings): void {
@@ -454,10 +490,14 @@ class TypenewApp {
   }
 
   private primeAsrEngine(): void {
+    this.asrInitializationError = null;
+    this.isAsrInitializing = true;
     this.asrInitializationPromise = this.initializeAsrEngine().catch((error) => {
       console.error('Failed to initialize ASR engine:', error);
+      this.asrInitializationError = error instanceof Error ? error : new Error(String(error));
       this.asrEngine = null;
     }).finally(() => {
+      this.isAsrInitializing = false;
       this.publishSettingsViewData();
     });
   }
@@ -477,6 +517,15 @@ class TypenewApp {
       processResourcesPath: process.resourcesPath,
       appPath: app.getAppPath(),
     });
+    if (this.asrEngine) {
+      console.log('ASR engine initialized', {
+        runtime: this.asrEngine.getRuntimeLabel(),
+        modelPath: this.asrEngine.getModelPath(),
+        modelDirectory: this.asrEngine.getModelDirectory(),
+      });
+    } else {
+      console.warn('ASR engine is not configured for current settings');
+    }
   }
 
   private showOverlayWindow(): void {
@@ -558,7 +607,7 @@ class TypenewApp {
       model_label: settings.recognition_mode === 'streaming_output'
         ? 'sherpa-onnx-streaming-zipformer-small-ctc-zh'
         : (settings.pinned_model_version || 'sherpa-onnx-sense-voice'),
-      model_status: this.asrEngine ? this.asrEngine.getRuntimeLabel() : 'not configured',
+      model_status: this.getAsrModelStatusLabel(),
       model_path_label: this.asrEngine?.getModelDirectory() || 'not configured',
       compute_backend_label: this.asrEngine
         ? this.describeProvider(this.asrEngine.getActiveProvider())
@@ -580,6 +629,8 @@ class TypenewApp {
     this.stateMachine.applySettings(settings);
     this.applyLoginItemSettings(settings);
     this.asrEngine = null;
+    this.translationAsrEngine = null;
+    this.translationAsrInitializationPromise = null;
     this.primeAsrEngine();
     await this.ensureAsrEngineReady();
     this.tray?.setContextMenu(this.buildTrayMenu());
@@ -606,9 +657,34 @@ class TypenewApp {
     app.setLoginItemSettings({
       openAtLogin,
       openAsHidden: openAtLogin,
+      name: WINDOWS_LOGIN_ITEM_NAME,
       path: process.execPath,
       args: openAtLogin ? ['--launch-at-login'] : [],
     });
+    this.cleanupLegacyWindowsLoginItems();
+  }
+
+  private cleanupLegacyWindowsLoginItems(): void {
+    if (process.platform !== 'win32') {
+      return;
+    }
+
+    for (const valueName of WINDOWS_LEGACY_LOGIN_ITEM_NAMES) {
+      spawnSync(
+        'reg',
+        [
+          'delete',
+          'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run',
+          '/v',
+          valueName,
+          '/f',
+        ],
+        {
+          stdio: 'ignore',
+          windowsHide: true,
+        }
+      );
+    }
   }
 
   private async runAsrDiagnostics(): Promise<AsrDiagnostics> {
@@ -667,10 +743,6 @@ class TypenewApp {
       return;
     }
 
-    if (intent === 'translation' && !translationSupportsRecognitionMode(this.settingsStore.getSettings().recognition_mode)) {
-      throw new Error('翻译输入暂只支持非流式模式。');
-    }
-
     // Capture frontmost app asynchronously - don't block recording start
     this.activeCaptureIntent = intent;
     void this.autoPaste.captureFrontmostApp().then((bundleId) => {
@@ -681,12 +753,21 @@ class TypenewApp {
 
     try {
       this.streamingSessionId += 1;
+      this.streamingChunkLogCount = 0;
       this.streamingPastedText = '';
+      this.streamingOutputText = '';
       this.streamingLatestText = '';
       this.streamingChunkQueue = Promise.resolve();
-      if (this.isStreamingOutputMode()) {
+      this.streamingPendingBoundaryPunctuation = false;
+      this.streamingSegmenter = null;
+      if (this.shouldUseStreamingForIntent(intent)) {
         await this.ensureAsrEngineReady();
-        this.asrEngine?.startStreamingSession();
+        if (!this.asrEngine) {
+          throw this.asrInitializationError ?? new Error('ASR engine not initialized');
+        }
+        this.asrEngine.startStreamingSession();
+        this.streamingSegmenter = new StreamingSegmenter();
+        console.log('Streaming ASR session started');
       }
 
       if (process.platform === 'win32') {
@@ -718,6 +799,11 @@ class TypenewApp {
     }
 
     this.stateMachine.startRecording();
+    console.log('Recording started', {
+      mode: this.settingsStore.getSettings().recognition_mode,
+      intent: this.activeCaptureIntent,
+      streaming: this.shouldUseStreamingForActiveCapture(),
+    });
     this.recordingStopAllowedAt = Date.now() + RECORDING_STOP_GUARD_MS;
     this.showOverlayWindow();
     this.updateTrayAnimation();
@@ -736,7 +822,7 @@ class TypenewApp {
 
     const audioChunk = this.audioRecorder.stop();
     this.audioRecorder = null;
-    if (this.isStreamingOutputMode()) {
+    if (this.shouldUseStreamingForActiveCapture()) {
       await this.finishStreamingOutput();
       return;
     }
@@ -749,10 +835,13 @@ class TypenewApp {
       return;
     }
 
-    this.stateMachine.beginTranscribing();
-    this.updateTrayAnimation();
-    this.showOverlayWindow();
-    this.publishSnapshot();
+    const useStreamingOutput = this.shouldUseStreamingForActiveCapture();
+    if (!useStreamingOutput) {
+      this.stateMachine.beginTranscribing();
+      this.updateTrayAnimation();
+      this.showOverlayWindow();
+      this.publishSnapshot();
+    }
 
     const samples = await new Promise<Float32Array>((resolve, reject) => {
       this.pendingRecorderResult = { resolve, reject };
@@ -770,7 +859,7 @@ class TypenewApp {
       return;
     }
 
-    if (this.isStreamingOutputMode()) {
+    if (useStreamingOutput) {
       await this.finishStreamingOutput();
       return;
     }
@@ -835,17 +924,17 @@ class TypenewApp {
     }
 
     try {
-      await this.ensureAsrEngineReady();
+      const engine = await this.getAsrEngineForTranscription();
       if (!this.isCurrentTranscriptionRun(runId)) {
         return;
       }
 
-      const modelPath = this.asrEngine?.getModelPath();
-      if (!modelPath || !this.asrEngine) {
+      const modelPath = engine?.getModelPath();
+      if (!modelPath || !engine) {
         throw new Error('ASR engine not initialized');
       }
 
-      const text = await this.asrEngine.transcribe(samples);
+      const text = await engine.transcribe(samples);
 
       if (!this.isCurrentTranscriptionRun(runId)) {
         return;
@@ -928,6 +1017,55 @@ class TypenewApp {
     return this.settingsStore.getSettings().recognition_mode === 'streaming_output';
   }
 
+  private shouldUseStreamingForIntent(intent: CaptureIntent): boolean {
+    return intent === 'dictation' && this.isStreamingOutputMode();
+  }
+
+  private shouldUseStreamingForActiveCapture(): boolean {
+    return this.shouldUseStreamingForIntent(this.activeCaptureIntent);
+  }
+
+  private async getAsrEngineForTranscription(): Promise<AsrEngine | null> {
+    if (this.activeCaptureIntent !== 'translation' || translationSupportsRecognitionMode(this.settingsStore.getSettings().recognition_mode)) {
+      await this.ensureAsrEngineReady();
+      return this.asrEngine;
+    }
+
+    if (this.translationAsrEngine) {
+      return this.translationAsrEngine;
+    }
+
+    if (!this.translationAsrInitializationPromise) {
+      const settings = {
+        ...this.settingsStore.getSettings(),
+        recognition_mode: 'non_streaming' as const,
+      };
+      console.log('Initializing non-streaming ASR engine for translation');
+      this.translationAsrInitializationPromise = initializeAsrEngine({
+        dataDir: this.getDataDir(),
+        settings,
+        processResourcesPath: process.resourcesPath,
+        appPath: app.getAppPath(),
+      }).then((engine) => {
+        this.translationAsrEngine = engine;
+        if (engine) {
+          console.log('Translation ASR engine initialized', {
+            runtime: engine.getRuntimeLabel(),
+            modelPath: engine.getModelPath(),
+            modelDirectory: engine.getModelDirectory(),
+          });
+        } else {
+          console.warn('Translation ASR engine is not configured');
+        }
+        return engine;
+      }).finally(() => {
+        this.translationAsrInitializationPromise = null;
+      });
+    }
+
+    return this.translationAsrInitializationPromise;
+  }
+
   private async translateTranscript(transcript: string): Promise<string> {
     const settings = this.settingsStore.getSettings();
     const language = getTranslationLanguageDefinition(settings.translation_target_language);
@@ -953,6 +1091,18 @@ class TypenewApp {
     });
 
     return this.stateMachine.finishOutput(translated);
+  }
+
+  private cancelStreamingOutputSession(reason: string): void {
+    this.streamingSessionId += 1;
+    this.asrEngine?.cancelStreamingSession();
+    this.streamingLatestText = '';
+    this.streamingPastedText = '';
+    this.streamingOutputText = '';
+    this.streamingPendingBoundaryPunctuation = false;
+    this.streamingSegmenter?.reset();
+    this.streamingSegmenter = null;
+    console.log('Streaming ASR session cancelled', { reason });
   }
 
   private async rewriteWithLlm(text: string): Promise<string | null> {
@@ -983,8 +1133,16 @@ class TypenewApp {
   }
 
   private handleRecordingSamples(samples: Float32Array): void {
-    if (!this.isStreamingOutputMode() || this.stateMachine.getStatus() !== 'recording') {
+    if (!this.shouldUseStreamingForActiveCapture() || this.stateMachine.getStatus() !== 'recording') {
       return;
+    }
+    this.streamingChunkLogCount += 1;
+    if (this.streamingChunkLogCount <= 5 || this.streamingChunkLogCount % 20 === 0) {
+      console.log('Streaming ASR chunk received', {
+        samples: samples.length,
+        sessionId: this.streamingSessionId,
+        count: this.streamingChunkLogCount,
+      });
     }
     this.queueStreamingChunk(samples, this.streamingSessionId);
   }
@@ -996,9 +1154,17 @@ class TypenewApp {
           return;
         }
 
+        const completedSpeechSegment = (this.streamingSegmenter?.push(samples).length ?? 0) > 0;
         await this.ensureAsrEngineReady();
         const settings = this.settingsStore.getSettings();
         const text = this.asrEngine?.acceptStreamingAudio(samples) ?? '';
+        if (this.streamingChunkLogCount <= 5 || this.streamingChunkLogCount % 20 === 0 || text.length > 0) {
+          console.log('Streaming ASR chunk decoded', {
+            sessionId,
+            samples: samples.length,
+            text_length: text.length,
+          });
+        }
         if (sessionId !== this.streamingSessionId || !text) {
           return;
         }
@@ -1013,10 +1179,23 @@ class TypenewApp {
           : '';
         this.streamingLatestText = cleaned;
 
-        if (delta && settings.auto_paste) {
-          await this.autoPaste.writeClipboard(delta);
-          await this.autoPaste.pasteToApp(this.previousAppBundleId);
+        if (delta) {
+          const pasteText = this.streamingPendingBoundaryPunctuation
+            ? prefixStreamingBoundaryPunctuation(this.streamingOutputText || this.streamingPastedText, delta)
+            : delta;
+
+          if (settings.auto_paste) {
+            await this.autoPaste.writeClipboard(pasteText);
+            await this.autoPaste.pasteToApp(this.previousAppBundleId);
+            this.streamingOutputText += pasteText;
+          }
+
           this.streamingPastedText = cleaned;
+          this.streamingPendingBoundaryPunctuation = false;
+        }
+
+        if (completedSpeechSegment && (this.streamingOutputText || this.streamingPastedText)) {
+          this.streamingPendingBoundaryPunctuation = true;
         }
       })
       .catch((error) => {
@@ -1037,10 +1216,15 @@ class TypenewApp {
     }
 
     const finalRawText = this.asrEngine?.finishStreamingSession() ?? '';
-    const finalText = cleanupTranscript(finalRawText || this.streamingLatestText, this.settingsStore.getSettings());
+    const finalText = ensureStreamingFinalPunctuation(
+      cleanupTranscript(finalRawText || this.streamingLatestText, this.settingsStore.getSettings())
+    );
     this.streamingLatestText = '';
 
     if (!finalText) {
+      this.streamingSegmenter?.reset();
+      this.streamingSegmenter = null;
+      this.streamingPendingBoundaryPunctuation = false;
       this.hideOverlayWindow();
       this.stateMachine.dismissOverlay();
       this.updateTrayAnimation();
@@ -1049,30 +1233,37 @@ class TypenewApp {
     }
 
     const settings = this.settingsStore.getSettings();
-    const normalized = this.stateMachine.finishTranscription(finalText);
+    const normalized = this.stateMachine.finishOutput(finalText);
     console.log('Streaming transcription complete', createTranscriptionLogMeta(normalized));
 
     if (settings.auto_paste) {
-      const finalDelta = normalized.startsWith(this.streamingPastedText)
-        ? normalized.slice(this.streamingPastedText.length)
+      const finalDelta = finalText.startsWith(this.streamingPastedText)
+        ? finalText.slice(this.streamingPastedText.length)
         : '';
+      const pasteText = this.streamingPendingBoundaryPunctuation
+        ? prefixStreamingBoundaryPunctuation(this.streamingOutputText || this.streamingPastedText, finalDelta)
+        : finalDelta;
 
-      if (finalDelta) {
-        await this.autoPaste.writeClipboard(finalDelta);
+      if (pasteText) {
+        await this.autoPaste.writeClipboard(pasteText);
         await this.autoPaste.pasteToApp(this.previousAppBundleId);
-      } else if (this.streamingPastedText && this.streamingPastedText !== normalized) {
+        this.streamingOutputText += pasteText;
+      } else if (this.streamingPastedText && this.streamingPastedText !== finalText) {
         console.warn('Streaming final text diverged from pasted partials', {
           pasted_length: this.streamingPastedText.length,
-          final_length: normalized.length,
+          final_length: finalText.length,
         });
       }
 
       await this.autoPaste.writeClipboard(normalized);
-      this.streamingPastedText = normalized;
+      this.streamingPastedText = finalText;
       this.stateMachine.markAutoPasteSuccess();
     } else {
       await this.autoPaste.writeClipboard(normalized);
     }
+    this.streamingSegmenter?.reset();
+    this.streamingSegmenter = null;
+    this.streamingPendingBoundaryPunctuation = false;
     this.publishSnapshot();
 
     setTimeout(() => {
@@ -1137,6 +1328,22 @@ class TypenewApp {
       default:
         return 'not configured';
     }
+  }
+
+  private getAsrModelStatusLabel(): string {
+    if (this.asrEngine) {
+      return this.asrEngine.getRuntimeLabel();
+    }
+
+    if (this.isAsrInitializing) {
+      return 'initializing';
+    }
+
+    if (this.asrInitializationError) {
+      return `error: ${this.asrInitializationError.message}`;
+    }
+
+    return 'not configured';
   }
 
 }
