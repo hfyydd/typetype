@@ -1,3 +1,4 @@
+import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -98,6 +99,103 @@ function getModelFilesFromDirectory(modelDirectory: string): ModelFiles | null {
   return null;
 }
 
+function isAsciiPath(value: string): boolean {
+  return /^[\x00-\x7f]*$/.test(value);
+}
+
+function hasOnlyAsciiModelPaths(modelFiles: ModelFiles): boolean {
+  return (
+    isAsciiPath(modelFiles.modelPath) &&
+    isAsciiPath(modelFiles.tokensPath) &&
+    (!modelFiles.bpeVocabPath || isAsciiPath(modelFiles.bpeVocabPath))
+  );
+}
+
+function sanitizeLinkName(value: string): string {
+  return value.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 96) || 'model';
+}
+
+function tryCreateWritableDirectory(candidate: string | null | undefined): string | null {
+  if (!candidate || !isAsciiPath(candidate)) {
+    return null;
+  }
+
+  try {
+    fs.mkdirSync(candidate, { recursive: true });
+    const probe = path.join(candidate, `.probe-${process.pid}-${Date.now()}`);
+    fs.writeFileSync(probe, '');
+    fs.rmSync(probe, { force: true });
+    return candidate;
+  } catch {
+    return null;
+  }
+}
+
+function getAsciiModelLinkRoot(): string | null {
+  const candidates = [
+    process.env.TYPETYPE_MODEL_LINK_DIR,
+    process.env.PROGRAMDATA ? path.join(process.env.PROGRAMDATA, 'typetype', 'model-links') : null,
+    'C:\\ProgramData\\typetype\\model-links',
+    (() => {
+      try {
+        const userData = app.getPath('userData');
+        return isAsciiPath(userData) ? path.join(userData, 'model-links') : null;
+      } catch {
+        return null;
+      }
+    })(),
+    process.env.TEMP && isAsciiPath(process.env.TEMP)
+      ? path.join(process.env.TEMP, 'typetype-model-links')
+      : null,
+  ];
+
+  for (const candidate of candidates) {
+    const writable = tryCreateWritableDirectory(candidate);
+    if (writable) {
+      return writable;
+    }
+  }
+
+  return null;
+}
+
+function ensureAsciiModelFiles(modelFiles: ModelFiles): ModelFiles {
+  if (hasOnlyAsciiModelPaths(modelFiles)) {
+    return modelFiles;
+  }
+
+  const modelDirectory = path.dirname(modelFiles.modelPath);
+  const linkRoot = getAsciiModelLinkRoot();
+  if (!linkRoot) {
+    return modelFiles;
+  }
+
+  const linkName = [
+    sanitizeLinkName(path.basename(modelDirectory)),
+    crypto.createHash('sha1').update(modelDirectory).digest('hex').slice(0, 10),
+  ].join('-');
+  const linkDirectory = path.join(linkRoot, linkName);
+
+  try {
+    if (fs.existsSync(linkDirectory) && !getModelFilesFromDirectory(linkDirectory)) {
+      fs.rmSync(linkDirectory, { recursive: true, force: true });
+    }
+
+    if (!fs.existsSync(linkDirectory)) {
+      fs.symlinkSync(modelDirectory, linkDirectory, process.platform === 'win32' ? 'junction' : 'dir');
+    }
+
+    const linkedModelFiles = getModelFilesFromDirectory(linkDirectory);
+    if (linkedModelFiles && hasOnlyAsciiModelPaths(linkedModelFiles)) {
+      return linkedModelFiles;
+    }
+  } catch (error) {
+    console.warn('Failed to create ASCII model path link:', error);
+  }
+
+  return modelFiles;
+}
+
 function isModelDirectoryCompatible(
   modelDirectory: string,
   recognitionMode?: RecognitionMode
@@ -162,6 +260,8 @@ export class AsrEngine {
     if (!this.modelFiles?.modelPath || !this.modelFiles.tokensPath) {
       throw new Error('Model path and tokens path are required');
     }
+
+    this.modelFiles = ensureAsciiModelFiles(this.modelFiles);
 
     if (!fs.existsSync(this.modelFiles.modelPath)) {
       throw new Error(`Model file not found: ${this.modelFiles.modelPath}`);
