@@ -3,7 +3,8 @@ import { app } from 'electron';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as https from 'https';
-import { execFileSync } from 'child_process';
+import * as tar from 'tar-stream';
+import * as bzip2 from 'bzip2';
 
 import { AsrEngine } from './asr-engine';
 import { Settings } from './types';
@@ -162,7 +163,44 @@ async function extractModelArchive(archivePath: string, modelsDir: string, model
   fs.rmSync(modelDir, { recursive: true, force: true });
 
   try {
-    execFileSync('tar', ['-xjf', archivePath, '-C', modelsDir], { stdio: 'pipe' });
+    const fileContent = fs.readFileSync(archivePath);
+    const decompressed = bzip2.decompress(fileContent);
+    const extractor = tar.extract();
+
+    await new Promise<void>((resolve, reject) => {
+      const entries: { name: string; data: Buffer[] }[] = [];
+
+      extractor.on('entry', (headers, stream, next) => {
+        const chunks: Buffer[] = [];
+        stream.on('data', (chunk: Buffer) => chunks.push(chunk));
+        stream.on('end', () => {
+          entries.push({ name: headers.name, data: chunks });
+          next();
+        });
+        stream.resume();
+      });
+
+      extractor.on('finish', () => {
+        try {
+          for (const entry of entries) {
+            const entryPath = path.join(modelsDir, entry.name);
+            if (entry.name.endsWith('/')) {
+              fs.mkdirSync(entryPath, { recursive: true });
+            } else {
+              fs.mkdirSync(path.dirname(entryPath), { recursive: true });
+              fs.writeFileSync(entryPath, Buffer.concat(entry.data));
+            }
+          }
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
+      });
+
+      extractor.on('error', reject);
+      extractor.end(decompressed);
+    });
+
     if (!modelDirectoryHasRequiredFiles(modelDir)) {
       throw new Error(`Extracted model is missing model.int8.onnx/model.onnx or tokens.txt: ${modelDir}`);
     }
