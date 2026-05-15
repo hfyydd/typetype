@@ -1,4 +1,4 @@
-import { LlmRewriteConfig, LlmRewriteResponse } from './types';
+import { LlmRewriteConfig, LlmRewriteResponse, LlmOauthConfig } from './types';
 
 const DEFAULT_SYSTEM_PROMPT = `You are a professional voice-to-text structuring assistant. Transform raw speech transcription into clear, polished, structured text.
 
@@ -16,10 +16,24 @@ Rules:
 The user text will be enclosed in <transcription> tags.`;
 
 export class LlmRewriteEngine {
-  private config: LlmRewriteConfig;
+  private config: LlmRewriteConfig | LlmOauthConfig;
 
-  constructor(config: LlmRewriteConfig) {
+  constructor(config: LlmRewriteConfig | LlmOauthConfig) {
     this.config = config;
+  }
+
+  private getAccessToken(): string {
+    if ('access_token' in this.config) {
+      return this.config.access_token;
+    }
+    return this.config.api_key;
+  }
+
+  private getTokenType(): string {
+    if ('token_type' in this.config) {
+      return this.config.token_type || 'Bearer';
+    }
+    return 'Bearer';
   }
 
   async rewrite(rawText: string): Promise<LlmRewriteResponse> {
@@ -41,9 +55,10 @@ export class LlmRewriteEngine {
       apiUrl = apiUrl.replace(/\/$/, '') + '/chat/completions';
     }
 
+    const token = this.getAccessToken();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${this.config.api_key}`,
+      'Authorization': `${this.getTokenType()} ${token}`,
     };
 
     // Anthropic requires different headers

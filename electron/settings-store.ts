@@ -45,6 +45,7 @@ export class SettingsStore {
         temperature: 0.3,
         max_tokens: 4096,
       },
+      llm_oauth: undefined,
     };
   }
 

@@ -273,6 +273,20 @@
                   <button type="button" id="llm-test-button" class="settings-secondary-button">测试连接</button>
                   <span id="llm-test-status" class="settings-row-description" style="margin-left: 12px;"></span>
                 </div>
+
+                <div class="settings-row" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--color-border);">
+                  <div class="settings-row-copy">
+                    <span class="settings-row-title">GPT 登录</span>
+                    <span class="settings-row-description">使用 GPT Plus/Pro 账号直接登录，无需填写 API Key。</span>
+                  </div>
+                  <button type="button" id="llm-oauth-button" class="settings-secondary-button">GPT 登录</button>
+                </div>
+                <div id="llm-oauth-status" class="settings-row" style="display: none;">
+                  <div class="settings-row-copy">
+                    <span id="llm-oauth-label" class="settings-row-description"></span>
+                  </div>
+                  <button type="button" id="llm-oauth-revoke" class="settings-secondary-button" style="color: var(--color-text-secondary);">取消登录</button>
+                </div>
               </div>
             </section>
           </section>

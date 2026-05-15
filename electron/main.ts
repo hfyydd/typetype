@@ -24,13 +24,14 @@ import { getLogFilePath, getLogDirectory, installFileLogger } from './logger';
 import { canStopRecording, RECORDING_STOP_GUARD_MS } from './recording-toggle';
 import { scheduleTranscriptionStart } from './transcription-timing';
 import { createTranscriptionLogMeta } from './transcription-log';
-import { UiSnapshot, SettingsViewData, Settings, AsrDiagnostics, CaptureIntent } from './types';
+import { UiSnapshot, SettingsViewData, Settings, AsrDiagnostics, CaptureIntent, LlmOauthConfig } from './types';
 import { getAvailableMicrophones } from './microphones';
 import { initializeAsrEngine } from './asr-bootstrap';
 import { cleanupTranscript } from './transcript-cleanup';
 import { TranslationEngine } from './translation-engine';
 import { getTranslationLanguageDefinition, translationSupportsRecognitionMode } from './translation-model-registry';
 import { LlmRewriteEngine, testLlmConnection } from './llm-rewrite';
+import { startOauthFlow, ensureValidToken } from './llm-oauth';
 import { StreamingSegmenter } from './streaming-segmentation';
 import { ensureStreamingFinalPunctuation, prefixStreamingBoundaryPunctuation } from './streaming-punctuation';
 
@@ -178,7 +179,8 @@ class TypenewApp {
       () => this.runAsrDiagnostics(),
       () => this.startRecording(),
       () => this.stopRecording(),
-      (config) => testLlmConnection(config)
+      (config) => testLlmConnection(config),
+      () => startOauthFlow()
     );
   }
 
@@ -1107,11 +1109,16 @@ class TypenewApp {
 
   private async rewriteWithLlm(text: string): Promise<string | null> {
     const settings = this.settingsStore.getSettings();
-    if (!settings.llm_rewrite?.enabled) {
+
+    // Determine which config to use: OAuth takes priority if available and enabled
+    const useOauth = !!(settings.llm_oauth?.enabled);
+    const config = useOauth ? settings.llm_oauth! : settings.llm_rewrite;
+
+    if (!config?.enabled) {
       return null;
     }
 
-    if (!settings.llm_rewrite.api_key) {
+    if (!useOauth && !('api_key' in config) && !(config as any).api_key) {
       console.log('[llm-rewrite] skipped: no API key configured');
       return null;
     }
@@ -1121,7 +1128,13 @@ class TypenewApp {
     this.publishSnapshot();
 
     try {
-      const engine = new LlmRewriteEngine(settings.llm_rewrite);
+      // For OAuth, ensure token is still valid (refresh if needed)
+      let activeConfig = config;
+      if (useOauth && 'access_token' in config) {
+        activeConfig = await ensureValidToken(config as LlmOauthConfig);
+      }
+
+      const engine = new LlmRewriteEngine(activeConfig);
       const result = await engine.rewrite(text);
       console.log('[llm-rewrite] success', { original: text, polished: result.polished_text });
       return result.polished_text;

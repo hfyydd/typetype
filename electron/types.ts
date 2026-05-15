@@ -14,6 +14,19 @@ export interface LlmRewriteConfig {
   max_tokens: number;
 }
 
+export interface LlmOauthConfig {
+  enabled: boolean;
+  provider: LlmProvider;
+  access_token: string;
+  token_type: string;
+  expires_at: number;
+  refresh_token?: string;
+  base_url: string;
+  model: string;
+  temperature: number;
+  max_tokens: number;
+}
+
 export interface LlmRewriteResponse {
   polished_text: string;
 }
@@ -31,6 +44,7 @@ export interface Settings {
   model_path: string | null;
   pinned_model_version: string;
   llm_rewrite: LlmRewriteConfig;
+  llm_oauth?: LlmOauthConfig;  // OAuth config for OpenAI
 }
 
 export interface HotkeyOption {

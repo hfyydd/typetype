@@ -134,6 +134,14 @@ function fillSettingsView(view) {
   llmTestStatus.textContent = "";
   llmTestStatus.dataset.tone = "";
 
+  // OAuth status
+  if (view.settings.llm_oauth?.enabled) {
+    updateOauthStatus(view.settings.llm_oauth);
+  } else {
+    llmOauthStatus.style.display = "none";
+    llmOauthButton.disabled = false;
+  }
+
   setVisible(permissionsNavItem, view.show_permissions_panel);
   setVisible(microphoneSettingsRow, view.show_microphone_settings);
   setVisible(accessibilitySettingsRow, view.show_accessibility_settings);
@@ -182,6 +190,7 @@ function collectSettings() {
       temperature: currentSettings?.llm_rewrite?.temperature ?? 0.3,
       max_tokens: currentSettings?.llm_rewrite?.max_tokens ?? 4096,
     },
+    llm_oauth: currentSettings?.llm_oauth,
   };
 }
 
@@ -362,6 +371,53 @@ for (const input of [llmBaseUrlInput, llmApiKeyInput, llmModelInput]) {
     llmTestStatus.dataset.tone = "";
     schedulePersistSettings();
   });
+}
+
+// OAuth button
+const llmOauthButton = document.querySelector("#llm-oauth-button");
+const llmOauthStatus = document.querySelector("#llm-oauth-status");
+const llmOauthLabel = document.querySelector("#llm-oauth-label");
+const llmOauthRevoke = document.querySelector("#llm-oauth-revoke");
+
+llmOauthButton.addEventListener("click", async () => {
+  llmOauthButton.disabled = true;
+  llmOauthLabel.textContent = "登录中...";
+  llmOauthStatus.style.display = "flex";
+
+  try {
+    const oauthConfig = await electronAPI.startOauthFlow();
+    // Save OAuth config
+    const settings = collectSettings();
+    settings.llm_oauth = oauthConfig;
+    await electronAPI.saveSettings(settings);
+    await refreshSettingsView("GPT 登录成功。");
+    updateOauthStatus(oauthConfig);
+  } catch (e) {
+    llmOauthLabel.textContent = `登录失败: ${e.message}`;
+    llmOauthLabel.style.color = "var(--color-error)";
+    llmOauthButton.disabled = false;
+  }
+});
+
+llmOauthRevoke.addEventListener("click", async () => {
+  const settings = collectSettings();
+  settings.llm_oauth = undefined;
+  await electronAPI.saveSettings(settings);
+  await refreshSettingsView("已取消 GPT 登录。");
+  llmOauthStatus.style.display = "none";
+  llmOauthButton.disabled = false;
+});
+
+function updateOauthStatus(oauthConfig) {
+  if (oauthConfig?.enabled) {
+    const expiresAt = new Date(oauthConfig.expires_at);
+    const timeLeft = Math.max(0, expiresAt - Date.now());
+    const hours = Math.floor(timeLeft / (1000 * 60 * 60));
+    llmOauthLabel.textContent = `已登录 (有效期约 ${hours} 小时)`;
+    llmOauthLabel.style.color = "";
+    llmOauthStatus.style.display = "flex";
+    llmOauthButton.disabled = true;
+  }
 }
 
 document.querySelector("#microphone-settings-button").addEventListener("click", () => {
