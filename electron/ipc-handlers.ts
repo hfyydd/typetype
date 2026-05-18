@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron';
-import { Settings, UiSnapshot, SettingsViewData, AsrDiagnostics, LlmRewriteConfig, LlmOauthConfig } from './types';
+import { Settings, UiSnapshot, SettingsViewData, AsrDiagnostics, LlmRewriteConfig } from './types';
 
 export function registerIpcHandlers(
   getSnapshot: () => UiSnapshot,
@@ -14,8 +14,7 @@ export function registerIpcHandlers(
   runAsrDiagnostics: () => Promise<AsrDiagnostics>,
   startRecording: () => void,
   stopRecording: () => void,
-  testLlmConnection: (config: LlmRewriteConfig) => Promise<{ ok: boolean; latency_ms: number; error?: string }>,
-  startOauthFlow: () => Promise<LlmOauthConfig>
+  testLlmConnection: (config: LlmRewriteConfig) => Promise<{ ok: boolean; latency_ms: number; error?: string }>
 ): void {
   ipcMain.handle('get_snapshot', () => getSnapshot());
   ipcMain.handle('get_settings_view_data', () => getSettingsViewData());
@@ -30,5 +29,4 @@ export function registerIpcHandlers(
   ipcMain.handle('start_recording', () => startRecording());
   ipcMain.handle('stop_recording', () => stopRecording());
   ipcMain.handle('test_llm_connection', (_event, config) => testLlmConnection(config));
-  ipcMain.handle('start_oauth_flow', () => startOauthFlow());
 }
