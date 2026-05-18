@@ -180,13 +180,13 @@
             <section class="settings-group">
               <div class="settings-group-heading">
                 <h3>LLM 润写</h3>
-                <p>调用 LLM API 优化语音转写结果，自动补全标点并整理结构。</p>
+                <p>调用 LLM API 优化语音转写结果，自动补全标点、梳理逻辑并整理层级结构。</p>
               </div>
 
               <label class="settings-row settings-row-toggle">
                 <div class="settings-row-copy">
                   <span class="settings-row-title">启用 LLM 润写</span>
-                  <span class="settings-row-description">开启后会清理口语转写、补全标点，并按内容整理为段落、清单或待办。</span>
+                  <span class="settings-row-description">开启后会清理口语转写、修正明显口误，尽量保留关键信息并整理为段落、清单或层级文档。</span>
                 </div>
                 <span class="settings-switch">
                   <input type="checkbox" id="llm_enabled" data-setting="llm_enabled" />
@@ -211,11 +211,12 @@
                 <label class="settings-row settings-row-stack">
                   <div class="settings-row-copy">
                     <span class="settings-row-title">Base URL</span>
-                    <span class="settings-row-description">国产模型统一选择“国产/第三方模型”，再从下方提示复制对应 Base URL。</span>
+                    <span class="settings-row-description">GPT 选择 OpenAI；国产模型统一选择“国产/第三方模型”，再从下方提示复制对应 Base URL。</span>
                   </div>
                   <div class="settings-row-control settings-input-wrap">
                     <input type="text" id="llm_base_url" data-setting="llm_base_url" list="llm-base-url-presets" placeholder="例如 https://api.minimaxi.com/v1" />
                     <datalist id="llm-base-url-presets">
+                      <option value="https://api.openai.com/v1">OpenAI GPT</option>
                       <option value="https://api.minimaxi.com/v1">MiniMax 中国区</option>
                       <option value="https://api.minimax.io/v1">MiniMax 国际区</option>
                       <option value="https://api.deepseek.com">DeepSeek</option>
@@ -231,7 +232,7 @@
                 <label class="settings-row settings-row-stack">
                   <div class="settings-row-copy">
                     <span class="settings-row-title">API Key</span>
-                    <span class="settings-row-description">密钥本地存储，不上传。</span>
+                    <span class="settings-row-description">密钥本地存储，不上传。OpenAI API Key 获取地址：https://platform.openai.com/api-keys</span>
                   </div>
                   <div class="settings-row-control settings-input-wrap">
                     <input type="password" id="llm_api_key" data-setting="llm_api_key" placeholder="sk-..." />
@@ -253,13 +254,15 @@
                       <option value="kimi-k2.6">月之暗面 Kimi</option>
                       <option value="Baichuan4">百川智能</option>
                       <option value="doubao-seed-1-6-250615">豆包/火山方舟</option>
-                      <option value="gpt-4o-mini">OpenAI</option>
+                      <option value="gpt-5.5">OpenAI 最强默认</option>
                     </datalist>
                   </div>
                 </label>
 
                 <div class="settings-provider-guide">
-                  <div><strong>国产模型都选“国产/第三方模型”。</strong></div>
+                  <div><strong>GPT 和国产模型都在这里填写 API Key。</strong></div>
+                  <div>OpenAI GPT：提供商选 <code>OpenAI (GPT)</code>，Base URL <code>https://api.openai.com/v1</code>，模型 <code>gpt-5.5</code>，API Key 获取地址 <code>https://platform.openai.com/api-keys</code></div>
+                  <div>国产模型都选 <code>国产/第三方模型（Base URL 自定义）</code>。</div>
                   <div>MiniMax：Base URL <code>https://api.minimaxi.com/v1</code>，模型 <code>MiniMax-M2.7</code></div>
                   <div>DeepSeek：Base URL <code>https://api.deepseek.com</code>，模型 <code>deepseek-v4-flash</code></div>
                   <div>通义千问：Base URL <code>https://dashscope.aliyuncs.com/compatible-mode/v1</code>，模型 <code>qwen-plus</code></div>
@@ -274,18 +277,11 @@
                   <span id="llm-test-status" class="settings-row-description" style="margin-left: 12px;"></span>
                 </div>
 
-                <div class="settings-row" style="margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--color-border);">
+                <div class="settings-row" id="llm-active-route">
                   <div class="settings-row-copy">
-                    <span class="settings-row-title">GPT 登录</span>
-                    <span class="settings-row-description">使用 GPT Plus/Pro 账号直接登录，无需填写 API Key。</span>
+                    <span class="settings-row-title">当前润写通道</span>
+                    <span id="llm-active-route-label" class="settings-row-description">未启用。</span>
                   </div>
-                  <button type="button" id="llm-oauth-button" class="settings-secondary-button">GPT 登录</button>
-                </div>
-                <div id="llm-oauth-status" class="settings-row" style="display: none;">
-                  <div class="settings-row-copy">
-                    <span id="llm-oauth-label" class="settings-row-description"></span>
-                  </div>
-                  <button type="button" id="llm-oauth-revoke" class="settings-secondary-button" style="color: var(--color-text-secondary);">取消登录</button>
                 </div>
               </div>
             </section>

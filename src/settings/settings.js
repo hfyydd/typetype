@@ -24,6 +24,7 @@ const llmApiKeyInput = document.querySelector("#llm_api_key");
 const llmModelInput = document.querySelector("#llm_model");
 const llmTestButton = document.querySelector("#llm-test-button");
 const llmTestStatus = document.querySelector("#llm-test-status");
+const llmActiveRouteLabel = document.querySelector("#llm-active-route-label");
 
 const panelTitle = document.querySelector("#panel-title");
 const panelKicker = document.querySelector("#panel-kicker");
@@ -124,23 +125,29 @@ function fillSettingsView(view) {
   populateMicrophoneSelect(view.microphones, view.settings.microphone_id);
 
   // LLM rewrite settings
-  const llmRewrite = view.settings.llm_rewrite ?? {};
+  const savedLlmRewrite = view.settings.llm_rewrite ?? {};
+  const llmRewrite = {
+    ...savedLlmRewrite,
+    provider: savedLlmRewrite.provider ?? "openai",
+    base_url: savedLlmRewrite.base_url ?? "https://api.openai.com/v1",
+    api_key: savedLlmRewrite.api_key ?? "",
+    model: savedLlmRewrite.model ?? "gpt-5.5",
+  };
+  const llmProviderValue = getProviderSelectValue(llmRewrite);
   llmEnabledToggle.checked = llmRewrite.enabled ?? false;
-  llmProviderSelect.value = llmRewrite.provider ?? "openai";
-  llmBaseUrlInput.value = llmRewrite.base_url ?? "https://api.openai.com/v1";
-  llmApiKeyInput.value = llmRewrite.api_key ?? "";
-  llmModelInput.value = llmRewrite.model ?? "gpt-4o-mini";
+  llmProviderSelect.value = llmProviderValue;
+  llmBaseUrlInput.value = llmRewrite.base_url;
+  llmApiKeyInput.value = llmRewrite.api_key;
+  llmModelInput.value = llmRewrite.model;
+  currentSettings.llm_rewrite = {
+    ...llmRewrite,
+    provider: llmProviderValue,
+  };
   setVisible(llmConfigPanel, llmRewrite.enabled);
   llmTestStatus.textContent = "";
   llmTestStatus.dataset.tone = "";
 
-  // OAuth status
-  if (view.settings.llm_oauth?.enabled) {
-    updateOauthStatus(view.settings.llm_oauth);
-  } else {
-    llmOauthStatus.style.display = "none";
-    llmOauthButton.disabled = false;
-  }
+  updateLlmActiveRoute(currentSettings);
 
   setVisible(permissionsNavItem, view.show_permissions_panel);
   setVisible(microphoneSettingsRow, view.show_microphone_settings);
@@ -168,6 +175,17 @@ function fillSettingsView(view) {
 }
 
 function collectSettings() {
+  const llmRewrite = {
+    enabled: llmEnabledToggle.checked,
+    provider: llmProviderSelect.value,
+    api_key: llmApiKeyInput.value,
+    base_url: llmBaseUrlInput.value,
+    model: llmModelInput.value,
+    temperature: currentSettings?.llm_rewrite?.temperature ?? 0.3,
+    max_tokens: currentSettings?.llm_rewrite?.max_tokens ?? 4096,
+  };
+  llmRewrite.provider = getProviderSelectValue(llmRewrite);
+
   return {
     ...currentSettings,
     hotkey: hotkeySelect.value,
@@ -181,16 +199,7 @@ function collectSettings() {
     model_path: modelPathTextarea.value || null,
     pinned_model_version: currentSettings?.pinned_model_version ?? "sherpa-onnx-sense-voice",
     custom_dictionary: parseDictionary(customDictionaryTextarea.value),
-    llm_rewrite: {
-      enabled: llmEnabledToggle.checked,
-      provider: llmProviderSelect.value,
-      api_key: llmApiKeyInput.value,
-      base_url: llmBaseUrlInput.value,
-      model: llmModelInput.value,
-      temperature: currentSettings?.llm_rewrite?.temperature ?? 0.3,
-      max_tokens: currentSettings?.llm_rewrite?.max_tokens ?? 4096,
-    },
-    llm_oauth: currentSettings?.llm_oauth,
+    llm_rewrite: llmRewrite,
   };
 }
 
@@ -216,6 +225,95 @@ function formatDictionary(entries) {
 function setStatus(message, tone = "default") {
   saveStatus.textContent = message;
   saveStatus.dataset.tone = tone;
+}
+
+function hasApiKeyConfig(settings) {
+  return Boolean(settings?.llm_rewrite?.enabled && settings.llm_rewrite.api_key?.trim());
+}
+
+function inferLlmRoute(rewrite = {}) {
+  const provider = (rewrite.provider || "").toLowerCase();
+  const baseUrl = (rewrite.base_url || "").toLowerCase();
+  const model = (rewrite.model || "").toLowerCase();
+  const modelLabel = rewrite.model || "未填写模型";
+
+  const knownProviders = [
+    { key: "openai", label: "OpenAI GPT", match: () => baseUrl.includes("api.openai.com") || /^gpt[-\w.]*|^o\d/.test(model) },
+    { key: "anthropic", label: "Claude API", match: () => baseUrl.includes("anthropic.com") || model.includes("claude") },
+    { key: "minimax", label: "MiniMax", match: () => baseUrl.includes("minimax") || model.includes("minimax") },
+    { key: "deepseek", label: "DeepSeek", match: () => baseUrl.includes("deepseek") || model.includes("deepseek") },
+    { key: "qwen", label: "通义千问", match: () => baseUrl.includes("dashscope.aliyuncs.com") || model.includes("qwen") },
+    { key: "zhipu", label: "智谱 GLM", match: () => baseUrl.includes("bigmodel.cn") || model.includes("glm") },
+    { key: "kimi", label: "Kimi/月之暗面", match: () => baseUrl.includes("moonshot.ai") || model.includes("kimi") },
+    { key: "baichuan", label: "百川", match: () => baseUrl.includes("baichuan-ai.com") || model.includes("baichuan") },
+    { key: "doubao", label: "豆包", match: () => baseUrl.includes("volces.com") || model.includes("doubao") },
+  ];
+
+  const matched = knownProviders.find((entry) => entry.match());
+  if (matched) {
+    return {
+      key: matched.key,
+      label: `${matched.label} · ${modelLabel}`,
+      isOpenAi: matched.key === "openai",
+    };
+  }
+
+  if (provider === "anthropic") {
+    return { key: "anthropic", label: `Claude API · ${modelLabel}`, isOpenAi: false };
+  }
+
+  if (provider === "openai") {
+    return { key: "openai", label: `OpenAI GPT · ${modelLabel}`, isOpenAi: true };
+  }
+
+  return { key: "custom", label: `国产/第三方模型 · ${modelLabel}`, isOpenAi: false };
+}
+
+function getProviderSelectValue(rewrite = {}) {
+  const route = inferLlmRoute(rewrite);
+  if (route.key === "openai") {
+    return "openai";
+  }
+  if (route.key === "anthropic") {
+    return "anthropic";
+  }
+  return "custom";
+}
+
+function getApiModelLabel(settings) {
+  const rewrite = settings?.llm_rewrite ?? {};
+  if (!rewrite.api_key?.trim()) {
+    return "未配置 API Key 模型";
+  }
+  return inferLlmRoute(rewrite).label;
+}
+
+function updateLlmActiveRoute(settings) {
+  if (!llmActiveRouteLabel) {
+    return;
+  }
+
+  if (!settings?.llm_rewrite?.enabled) {
+    llmActiveRouteLabel.textContent = "未启用。";
+    llmActiveRouteLabel.dataset.tone = "";
+    return;
+  }
+
+  const apiReady = hasApiKeyConfig(settings);
+
+  if (apiReady) {
+    const rewrite = settings.llm_rewrite ?? {};
+    const route = inferLlmRoute(rewrite);
+    const keyTip = route.isOpenAi
+      ? "正在使用 OpenAI Platform API Key 调用 GPT；ChatGPT Plus/Pro 订阅不等于 API 免费额度。"
+      : "正在使用上方 API Key 模型做结构化润写。";
+    llmActiveRouteLabel.textContent = `当前通道：${route.label}。${keyTip}`;
+    llmActiveRouteLabel.dataset.tone = "success";
+    return;
+  }
+
+  llmActiveRouteLabel.textContent = "已启用，但还没有 API Key。GPT 和国产模型都在上方填写 API Key、Base URL 和模型名。";
+  llmActiveRouteLabel.dataset.tone = "error";
 }
 
 function formatAsrDiagnostics(report) {
@@ -306,6 +404,7 @@ for (const element of [
     if (element === llmEnabledToggle) {
       setVisible(llmConfigPanel, llmEnabledToggle.checked);
     }
+    updateLlmActiveRoute(collectSettings());
     cancelScheduledSave();
     void persistSettings();
   });
@@ -369,55 +468,9 @@ for (const input of [llmBaseUrlInput, llmApiKeyInput, llmModelInput]) {
     }
     llmTestStatus.textContent = "";
     llmTestStatus.dataset.tone = "";
+    updateLlmActiveRoute(collectSettings());
     schedulePersistSettings();
   });
-}
-
-// OAuth button
-const llmOauthButton = document.querySelector("#llm-oauth-button");
-const llmOauthStatus = document.querySelector("#llm-oauth-status");
-const llmOauthLabel = document.querySelector("#llm-oauth-label");
-const llmOauthRevoke = document.querySelector("#llm-oauth-revoke");
-
-llmOauthButton.addEventListener("click", async () => {
-  llmOauthButton.disabled = true;
-  llmOauthLabel.textContent = "登录中...";
-  llmOauthStatus.style.display = "flex";
-
-  try {
-    const oauthConfig = await electronAPI.startOauthFlow();
-    // Save OAuth config
-    const settings = collectSettings();
-    settings.llm_oauth = oauthConfig;
-    await electronAPI.saveSettings(settings);
-    await refreshSettingsView("GPT 登录成功。");
-    updateOauthStatus(oauthConfig);
-  } catch (e) {
-    llmOauthLabel.textContent = `登录失败: ${e.message}`;
-    llmOauthLabel.style.color = "var(--color-error)";
-    llmOauthButton.disabled = false;
-  }
-});
-
-llmOauthRevoke.addEventListener("click", async () => {
-  const settings = collectSettings();
-  settings.llm_oauth = undefined;
-  await electronAPI.saveSettings(settings);
-  await refreshSettingsView("已取消 GPT 登录。");
-  llmOauthStatus.style.display = "none";
-  llmOauthButton.disabled = false;
-});
-
-function updateOauthStatus(oauthConfig) {
-  if (oauthConfig?.enabled) {
-    const expiresAt = new Date(oauthConfig.expires_at);
-    const timeLeft = Math.max(0, expiresAt - Date.now());
-    const hours = Math.floor(timeLeft / (1000 * 60 * 60));
-    llmOauthLabel.textContent = `已登录 (有效期约 ${hours} 小时)`;
-    llmOauthLabel.style.color = "";
-    llmOauthStatus.style.display = "flex";
-    llmOauthButton.disabled = true;
-  }
 }
 
 document.querySelector("#microphone-settings-button").addEventListener("click", () => {

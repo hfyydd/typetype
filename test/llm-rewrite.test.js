@@ -42,6 +42,9 @@ test("LlmRewriteEngine keeps rewrite behavior and removes MiniMax think blocks",
   assert.equal(result.polished_text, "今天我们测试语音输入。");
   assert.match(requestBody.messages[0].content, /PUNCTUATION/i);
   assert.match(requestBody.messages[0].content, /CLEANUP/i);
+  assert.match(requestBody.messages[0].content, /LOGIC/i);
   assert.match(requestBody.messages[0].content, /STRUCTURE/i);
+  assert.match(requestBody.messages[0].content, /COMPLETENESS/i);
   assert.match(requestBody.messages[0].content, /action items/i);
+  assert.match(requestBody.messages[0].content, /一、/);
 });

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { UiSnapshot, SettingsViewData, Settings, AsrDiagnostics, LlmRewriteConfig, LlmOauthConfig } from './types';
+import { UiSnapshot, SettingsViewData, Settings, AsrDiagnostics, LlmRewriteConfig } from './types';
 
 export interface ElectronAPI {
   getSettingsViewData: () => Promise<SettingsViewData>;
@@ -14,7 +14,6 @@ export interface ElectronAPI {
   startRecording: () => Promise<void>;
   stopRecording: () => Promise<void>;
   testLlmConnection: (config: LlmRewriteConfig) => Promise<{ ok: boolean; latency_ms: number; error?: string }>;
-  startOauthFlow: () => Promise<LlmOauthConfig>;
   subscribeSnapshot: (listener: (snapshot: UiSnapshot) => void) => () => void;
   subscribeSettingsViewData: (listener: (view: SettingsViewData) => void) => () => void;
   platform: string;
@@ -33,7 +32,6 @@ const api: ElectronAPI = {
   startRecording: () => ipcRenderer.invoke('start_recording'),
   stopRecording: () => ipcRenderer.invoke('stop_recording'),
   testLlmConnection: (config: LlmRewriteConfig) => ipcRenderer.invoke('test_llm_connection', config),
-  startOauthFlow: () => ipcRenderer.invoke('start_oauth_flow'),
   subscribeSnapshot: (listener: (snapshot: UiSnapshot) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, snapshot: UiSnapshot) => {
       listener(snapshot);

@@ -41,11 +41,10 @@ export class SettingsStore {
         provider: 'openai',
         api_key: '',
         base_url: 'https://api.openai.com/v1',
-        model: 'gpt-4o-mini',
+        model: 'gpt-5.5',
         temperature: 0.3,
         max_tokens: 4096,
       },
-      llm_oauth: undefined,
     };
   }
 
