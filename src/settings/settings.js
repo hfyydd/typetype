@@ -12,8 +12,27 @@ const launchAtLoginToggle = document.querySelector("#launch_at_login");
 const recognitionModeSelect = document.querySelector("#recognition_mode");
 const computeBackendSelect = document.querySelector("#compute_backend");
 const translationTargetLanguageSelect = document.querySelector("#translation_target_language");
-const customDictionaryTextarea = document.querySelector("#custom_dictionary");
 const modelPathTextarea = document.querySelector("#model_path");
+const dictionaryStats = document.querySelector("#dictionary-stats");
+const dictionarySearchInput = document.querySelector("#dictionary-search");
+const dictionaryList = document.querySelector("#dictionary-list");
+const dictionaryEditor = document.querySelector("#dictionary-editor");
+const dictionaryTermInput = document.querySelector("#dictionary-term-input");
+const dictionaryAliasInput = document.querySelector("#dictionary-alias-input");
+const dictionaryAddButton = document.querySelector("#dictionary-add-button");
+const dictionarySaveEntryButton = document.querySelector("#dictionary-save-entry-button");
+const dictionaryCancelEntryButton = document.querySelector("#dictionary-cancel-entry-button");
+const dictionaryPasteInput = document.querySelector("#dictionary-paste-input");
+const dictionaryPreviewPasteButton = document.querySelector("#dictionary-preview-paste-button");
+const dictionaryImportFileButton = document.querySelector("#dictionary-import-file-button");
+const dictionaryConfirmImportButton = document.querySelector("#dictionary-confirm-import-button");
+const dictionaryExportButton = document.querySelector("#dictionary-export-button");
+const dictionaryPreview = document.querySelector("#dictionary-preview");
+const dictionaryHelpButton = document.querySelector("#dictionary-help-button");
+const dictionaryHelpDialog = document.querySelector("#dictionary-help-dialog");
+const dictionaryHelpCloseButton = document.querySelector("#dictionary-help-close-button");
+const dictionaryCopyExampleButton = document.querySelector("#dictionary-copy-example-button");
+const dictionaryHelpExample = document.querySelector("#dictionary-help-example");
 
 // LLM rewrite settings
 const llmEnabledToggle = document.querySelector("#llm_enabled");
@@ -49,6 +68,9 @@ let isHydrating = false;
 let saveGeneration = 0;
 let saveTimer = null;
 let unsubscribeSettingsViewData = null;
+let dictionaryView = null;
+let activeDictionaryEntryId = null;
+let pendingDictionaryImportPreview = null;
 
 const TEXT_INPUT_SAVE_DELAY_MS = 450;
 
@@ -120,7 +142,6 @@ function fillSettingsView(view) {
   recognitionModeSelect.value = view.settings.recognition_mode ?? "non_streaming";
   computeBackendSelect.value = view.settings.compute_backend ?? "auto";
   translationTargetLanguageSelect.value = view.settings.translation_target_language ?? "en";
-  customDictionaryTextarea.value = formatDictionary(view.settings.custom_dictionary ?? []);
   modelPathTextarea.value = view.settings.model_path ?? "";
   populateMicrophoneSelect(view.microphones, view.settings.microphone_id);
 
@@ -198,28 +219,9 @@ function collectSettings() {
     translation_target_language: translationTargetLanguageSelect.value,
     model_path: modelPathTextarea.value || null,
     pinned_model_version: currentSettings?.pinned_model_version ?? "sherpa-onnx-sense-voice",
-    custom_dictionary: parseDictionary(customDictionaryTextarea.value),
+    custom_dictionary: currentSettings?.custom_dictionary ?? [],
     llm_rewrite: llmRewrite,
   };
-}
-
-function parseDictionary(raw) {
-  return raw
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const [from, ...rest] = line.split("=>");
-      return {
-        from: (from ?? "").trim(),
-        to: rest.join("=>").trim()
-      };
-    })
-    .filter((entry) => entry.from && entry.to);
-}
-
-function formatDictionary(entries) {
-  return entries.map((entry) => `${entry.from} => ${entry.to}`).join("\n");
 }
 
 function setStatus(message, tone = "default") {
@@ -316,6 +318,242 @@ function updateLlmActiveRoute(settings) {
   llmActiveRouteLabel.dataset.tone = "error";
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+async function loadDictionaryView() {
+  dictionaryView = await electronAPI.getDictionaryViewData();
+  renderDictionaryView();
+}
+
+function renderDictionaryView() {
+  if (!dictionaryView) {
+    return;
+  }
+
+  const stats = dictionaryView.stats;
+  dictionaryStats.textContent = `个人词典 ${stats.total} 条，已启用 ${stats.enabled} 条；纠错词 ${stats.replacements} 条，常用词 ${stats.terms} 条；内置基础词库 ${stats.system_terms} 条。`;
+
+  const query = dictionarySearchInput.value.trim().toLocaleLowerCase();
+  const visibleEntries = dictionaryView.entries.filter((entry) => {
+    if (!query) {
+      return true;
+    }
+    return [entry.term, entry.replacement, ...(entry.aliases ?? [])]
+      .join(" ")
+      .toLocaleLowerCase()
+      .includes(query);
+  });
+
+  if (visibleEntries.length === 0) {
+    dictionaryList.innerHTML = `<div class="dictionary-empty">还没有匹配的词条。</div>`;
+    return;
+  }
+
+  dictionaryList.innerHTML = visibleEntries
+    .map((entry) => {
+      const aliasText = (entry.aliases ?? []).join("、") || "常用词保护";
+      const kindLabel = entry.kind === "replacement" ? "纠错词" : "常用词";
+      return `
+        <article class="dictionary-item" data-id="${escapeHtml(entry.id)}">
+          <div class="dictionary-item-main">
+            <div class="dictionary-item-title">
+              <strong>${escapeHtml(entry.term)}</strong>
+              <span class="dictionary-kind">${kindLabel}</span>
+              <span class="dictionary-kind" data-enabled="${entry.enabled ? "true" : "false"}">${entry.enabled ? "已启用" : "已停用"}</span>
+            </div>
+            <div class="dictionary-item-meta">${escapeHtml(aliasText)}</div>
+          </div>
+          <div class="dictionary-item-actions">
+            <button type="button" class="settings-secondary-button" data-action="toggle">${entry.enabled ? "停用" : "启用"}</button>
+            <button type="button" class="settings-secondary-button" data-action="edit">编辑</button>
+            <button type="button" class="settings-secondary-button" data-action="delete">删除</button>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
+}
+
+function openDictionaryEditor(entry = null) {
+  activeDictionaryEntryId = entry?.id ?? null;
+  dictionaryTermInput.value = entry?.term ?? "";
+  dictionaryAliasInput.value = (entry?.aliases ?? []).join("，");
+  dictionaryEditor.hidden = false;
+  dictionaryTermInput.focus();
+}
+
+function closeDictionaryEditor() {
+  activeDictionaryEntryId = null;
+  dictionaryTermInput.value = "";
+  dictionaryAliasInput.value = "";
+  dictionaryEditor.hidden = true;
+}
+
+function collectDictionaryEntryFromEditor() {
+  const aliases = dictionaryAliasInput.value
+    .split(/[\n,，;；、]+/g)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const existing = dictionaryView?.entries?.find((entry) => entry.id === activeDictionaryEntryId);
+  const term = dictionaryTermInput.value.trim();
+  return {
+    ...(existing ?? {}),
+    id: activeDictionaryEntryId ?? undefined,
+    kind: aliases.length > 0 ? "replacement" : "term",
+    term,
+    replacement: term,
+    aliases,
+    enabled: existing?.enabled ?? true,
+    source: existing?.source ?? "manual",
+  };
+}
+
+function renderDictionaryPreview(preview) {
+  pendingDictionaryImportPreview = preview;
+  dictionaryConfirmImportButton.disabled = preview.summary.added + preview.summary.updated === 0;
+  const summary = preview.summary;
+  const warnings = preview.warnings.length
+    ? `<div class="dictionary-preview-warning">${preview.warnings.map(escapeHtml).join("<br />")}</div>`
+    : "";
+  const sampleRows = preview.items
+    .slice(0, 8)
+    .map((item) => {
+      const label = item.status === "add" ? "新增"
+        : item.status === "update" ? "更新"
+          : item.status === "duplicate" ? "重复"
+            : item.status === "too_long" ? "超长"
+              : "无效";
+      const text = item.entry
+        ? `${item.entry.kind === "replacement" ? (item.entry.aliases ?? []).join("、") + " -> " : ""}${item.entry.term}`
+        : item.raw;
+      return `<div class="dictionary-preview-row" data-status="${item.status}"><span>${label}</span><strong>${escapeHtml(text)}</strong></div>`;
+    })
+    .join("");
+
+  dictionaryPreview.innerHTML = `
+    ${warnings}
+    <div class="dictionary-preview-summary">
+      ${escapeHtml(preview.source_name)}：新增 ${summary.added}，更新 ${summary.updated}，重复 ${summary.duplicate}，无效 ${summary.invalid}，超长 ${summary.too_long}。
+    </div>
+    <div class="dictionary-preview-rows">${sampleRows}</div>
+  `;
+}
+
+async function saveDictionaryEntryFromEditor() {
+  const entry = collectDictionaryEntryFromEditor();
+  if (!entry.term) {
+    setStatus("请先填写正确词。", "error");
+    return;
+  }
+
+  try {
+    dictionaryView = await electronAPI.saveDictionaryEntry(entry);
+    renderDictionaryView();
+    closeDictionaryEditor();
+    setStatus("个人词典已保存。");
+  } catch (error) {
+    setStatus(error?.message || "词条保存失败。", "error");
+  }
+}
+
+async function handleDictionaryListAction(event) {
+  const button = event.target.closest("button[data-action]");
+  const item = event.target.closest(".dictionary-item");
+  if (!button || !item || !dictionaryView) {
+    return;
+  }
+
+  const entry = dictionaryView.entries.find((value) => value.id === item.dataset.id);
+  if (!entry) {
+    return;
+  }
+
+  const action = button.dataset.action;
+  try {
+    if (action === "edit") {
+      openDictionaryEditor(entry);
+      return;
+    }
+    if (action === "toggle") {
+      dictionaryView = await electronAPI.setDictionaryEntryEnabled(entry.id, !entry.enabled);
+      renderDictionaryView();
+      setStatus(entry.enabled ? "词条已停用。" : "词条已启用。");
+      return;
+    }
+    if (action === "delete") {
+      dictionaryView = await electronAPI.deleteDictionaryEntry(entry.id);
+      renderDictionaryView();
+      setStatus("词条已删除。");
+    }
+  } catch (error) {
+    setStatus(error?.message || "词典操作失败。", "error");
+  }
+}
+
+async function previewPastedDictionary() {
+  const content = dictionaryPasteInput.value.trim();
+  if (!content) {
+    setStatus("请先粘贴要导入的词。", "error");
+    return;
+  }
+
+  try {
+    const preview = await electronAPI.previewDictionaryImport({ content });
+    renderDictionaryPreview(preview);
+    setStatus("导入预览已生成，确认后才会写入。");
+  } catch (error) {
+    setStatus(error?.message || "导入预览失败。", "error");
+  }
+}
+
+async function previewDictionaryFile() {
+  try {
+    const preview = await electronAPI.selectDictionaryImportFile();
+    if (!preview) {
+      return;
+    }
+    renderDictionaryPreview(preview);
+    setStatus("文件导入预览已生成，确认后才会写入。");
+  } catch (error) {
+    setStatus(error?.message || "文件导入失败。", "error");
+  }
+}
+
+async function confirmDictionaryImport() {
+  if (!pendingDictionaryImportPreview) {
+    return;
+  }
+
+  try {
+    dictionaryView = await electronAPI.commitDictionaryImport(pendingDictionaryImportPreview);
+    pendingDictionaryImportPreview = null;
+    dictionaryConfirmImportButton.disabled = true;
+    dictionaryPreview.innerHTML = "";
+    dictionaryPasteInput.value = "";
+    renderDictionaryView();
+    setStatus("词典导入已完成。");
+  } catch (error) {
+    setStatus(error?.message || "确认导入失败。", "error");
+  }
+}
+
+async function exportDictionary() {
+  try {
+    const result = await electronAPI.exportDictionary();
+    if (result.ok) {
+      setStatus(`个人词典已导出：${result.path}`);
+    }
+  } catch (error) {
+    setStatus(error?.message || "导出失败。", "error");
+  }
+}
+
 function formatAsrDiagnostics(report) {
   return [
     `结果: ${report.ok ? "通过" : "失败"}`,
@@ -331,6 +569,7 @@ function formatAsrDiagnostics(report) {
 async function refreshSettingsView(statusMessage = null) {
   const view = await electronAPI.getSettingsViewData();
   fillSettingsView(view);
+  await loadDictionaryView();
   if (statusMessage) {
     setStatus(statusMessage);
   } else {
@@ -410,7 +649,7 @@ for (const element of [
   });
 }
 
-for (const element of [customDictionaryTextarea, modelPathTextarea]) {
+for (const element of [modelPathTextarea]) {
   element.addEventListener("input", () => {
     if (isHydrating) {
       return;
@@ -423,11 +662,6 @@ for (const element of [customDictionaryTextarea, modelPathTextarea]) {
     void persistSettings();
   });
 }
-
-customDictionaryTextarea.addEventListener("blur", () => {
-  cancelScheduledSave();
-  void persistSettings();
-});
 
 modelPathTextarea.addEventListener("blur", () => {
   cancelScheduledSave();
@@ -472,6 +706,42 @@ for (const input of [llmBaseUrlInput, llmApiKeyInput, llmModelInput]) {
     schedulePersistSettings();
   });
 }
+
+dictionarySearchInput.addEventListener("input", renderDictionaryView);
+dictionaryList.addEventListener("click", (event) => {
+  void handleDictionaryListAction(event);
+});
+dictionaryAddButton.addEventListener("click", () => openDictionaryEditor());
+dictionaryCancelEntryButton.addEventListener("click", closeDictionaryEditor);
+dictionarySaveEntryButton.addEventListener("click", () => {
+  void saveDictionaryEntryFromEditor();
+});
+dictionaryPreviewPasteButton.addEventListener("click", () => {
+  void previewPastedDictionary();
+});
+dictionaryImportFileButton.addEventListener("click", () => {
+  void previewDictionaryFile();
+});
+dictionaryConfirmImportButton.addEventListener("click", () => {
+  void confirmDictionaryImport();
+});
+dictionaryExportButton.addEventListener("click", () => {
+  void exportDictionary();
+});
+dictionaryHelpButton.addEventListener("click", () => {
+  dictionaryHelpDialog.showModal();
+});
+dictionaryHelpCloseButton.addEventListener("click", () => {
+  dictionaryHelpDialog.close();
+});
+dictionaryCopyExampleButton.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(dictionaryHelpExample.value);
+    setStatus("导入示例已复制。");
+  } catch (_) {
+    setStatus("复制失败，可以手动选择示例内容。", "error");
+  }
+});
 
 document.querySelector("#microphone-settings-button").addEventListener("click", () => {
   runAction("openMicrophoneSettings", "已打开麦克风权限设置。");

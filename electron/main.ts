@@ -6,6 +6,7 @@ import {
   shell,
   ipcMain,
   session,
+  dialog,
 } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -24,7 +25,17 @@ import { getLogFilePath, getLogDirectory, installFileLogger } from './logger';
 import { canStopRecording, RECORDING_STOP_GUARD_MS } from './recording-toggle';
 import { scheduleTranscriptionStart } from './transcription-timing';
 import { createTranscriptionLogMeta } from './transcription-log';
-import { UiSnapshot, SettingsViewData, Settings, AsrDiagnostics, CaptureIntent } from './types';
+import {
+  UiSnapshot,
+  SettingsViewData,
+  Settings,
+  AsrDiagnostics,
+  CaptureIntent,
+  DictionaryEntry,
+  DictionaryImportPreview,
+  DictionaryImportRequest,
+  DictionaryViewData,
+} from './types';
 import { getAvailableMicrophones } from './microphones';
 import { initializeAsrEngine } from './asr-bootstrap';
 import { cleanupTranscript } from './transcript-cleanup';
@@ -34,6 +45,8 @@ import { testLlmConnection } from './llm-rewrite';
 import { rewriteWithPreferredLlm } from './llm-route';
 import { StreamingSegmenter } from './streaming-segmentation';
 import { ensureStreamingFinalPunctuation, prefixStreamingBoundaryPunctuation } from './streaming-punctuation';
+import { DictionaryStore } from './dictionary-store';
+import { createDictionaryImportPreview } from './dictionary-import';
 
 const FEEDBACK_EMAIL = 'feedback@typetype.app';
 const WINDOWS_LOGIN_ITEM_NAME = 'typetype';
@@ -82,6 +95,7 @@ class TypenewApp {
   private streamingPendingBoundaryPunctuation = false;
   private activeCaptureIntent: CaptureIntent = 'dictation';
   private translationEngine: TranslationEngine;
+  private dictionaryStore: DictionaryStore;
 
   constructor() {
     this.settingsStore = new SettingsStore();
@@ -89,6 +103,11 @@ class TypenewApp {
     this.autoPaste = new AutoPaste();
     this.trayManager = new TrayManager(this.getResourcesPath());
     this.shortcutManager = new ShortcutManager();
+    this.dictionaryStore = new DictionaryStore({
+      dataDir: this.getDataDir(),
+      resourcesPath: this.getResourcesPath(),
+      legacyCustomDictionary: this.settingsStore.getSettings().custom_dictionary,
+    });
     this.translationEngine = new TranslationEngine({
       dataDir: this.getDataDir(),
       processResourcesPath: process.resourcesPath,
@@ -116,6 +135,77 @@ class TypenewApp {
 
   private getDataDir(): string {
     return this.settingsStore.getDataDir();
+  }
+
+  private getDictionaryViewData(): DictionaryViewData {
+    return this.dictionaryStore.getViewData();
+  }
+
+  private saveDictionaryEntry(entry: Partial<DictionaryEntry>): DictionaryViewData {
+    this.dictionaryStore.saveEntry(entry);
+    return this.dictionaryStore.getViewData();
+  }
+
+  private deleteDictionaryEntry(id: string): DictionaryViewData {
+    this.dictionaryStore.deleteEntry(id);
+    return this.dictionaryStore.getViewData();
+  }
+
+  private setDictionaryEntryEnabled(id: string, enabled: boolean): DictionaryViewData {
+    this.dictionaryStore.setEntryEnabled(id, enabled);
+    return this.dictionaryStore.getViewData();
+  }
+
+  private previewDictionaryImport(request: DictionaryImportRequest): Promise<DictionaryImportPreview> {
+    return createDictionaryImportPreview(request, this.dictionaryStore.getEntries());
+  }
+
+  private commitDictionaryImport(preview: DictionaryImportPreview): DictionaryViewData {
+    return this.dictionaryStore.commitImportPreview(preview);
+  }
+
+  private async selectDictionaryImportFile(): Promise<DictionaryImportPreview | null> {
+    const options: Electron.OpenDialogOptions = {
+      title: '选择要导入的词典文件',
+      properties: ['openFile'],
+      filters: [
+        { name: '词典文件', extensions: ['txt', 'csv', 'xlsx', 'xls', 'docx', 'wps', 'et'] },
+        { name: '全部文件', extensions: ['*'] },
+      ],
+    };
+    const result = this.settingsWindow
+      ? await dialog.showOpenDialog(this.settingsWindow, options)
+      : await dialog.showOpenDialog(options);
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return null;
+    }
+
+    const filePath = result.filePaths[0];
+    return this.previewDictionaryImport({
+      file_path: filePath,
+      file_name: path.basename(filePath),
+    });
+  }
+
+  private async exportDictionary(): Promise<{ ok: boolean; path?: string }> {
+    const options: Electron.SaveDialogOptions = {
+      title: '导出个人词典',
+      defaultPath: path.join(app.getPath('desktop'), 'typetype-dictionary.json'),
+      filters: [
+        { name: 'JSON 文件', extensions: ['json'] },
+      ],
+    };
+    const result = this.settingsWindow
+      ? await dialog.showSaveDialog(this.settingsWindow, options)
+      : await dialog.showSaveDialog(options);
+
+    if (result.canceled || !result.filePath) {
+      return { ok: false };
+    }
+
+    this.dictionaryStore.exportTo(result.filePath);
+    return { ok: true, path: result.filePath };
   }
 
   private setupApp(): void {
@@ -179,7 +269,15 @@ class TypenewApp {
       () => this.runAsrDiagnostics(),
       () => this.startRecording(),
       () => this.stopRecording(),
-      (config) => testLlmConnection(config)
+      (config) => testLlmConnection(config),
+      () => this.getDictionaryViewData(),
+      (entry) => this.saveDictionaryEntry(entry),
+      (id) => this.deleteDictionaryEntry(id),
+      (id, enabled) => this.setDictionaryEntryEnabled(id, enabled),
+      (request) => this.previewDictionaryImport(request),
+      (preview) => this.commitDictionaryImport(preview),
+      () => this.selectDictionaryImportFile(),
+      () => this.exportDictionary()
     );
   }
 
@@ -950,7 +1048,7 @@ class TypenewApp {
       }
 
       const settings = this.settingsStore.getSettings();
-      const cleanedTranscript = cleanupTranscript(text, settings);
+      const cleanedTranscript = this.cleanupTranscriptWithDictionary(text, settings);
       if (!cleanedTranscript) {
         this.hideOverlayWindow();
         this.stateMachine.dismissOverlay();
@@ -1094,6 +1192,15 @@ class TypenewApp {
     return this.stateMachine.finishOutput(translated);
   }
 
+  private cleanupTranscriptWithDictionary(
+    text: string,
+    settings: Settings,
+    options: { partial?: boolean } = {}
+  ): string {
+    const cleaned = cleanupTranscript(text, settings);
+    return this.dictionaryStore.applyToText(cleaned, options).trim();
+  }
+
   private cancelStreamingOutputSession(reason: string): void {
     this.streamingSessionId += 1;
     this.asrEngine?.cancelStreamingSession();
@@ -1117,7 +1224,9 @@ class TypenewApp {
     this.updateTrayAnimation();
     this.publishSnapshot();
 
-    const result = await rewriteWithPreferredLlm(text, settings);
+    const result = await rewriteWithPreferredLlm(text, settings, {
+      preserveTerms: this.dictionaryStore.getMatchedTerms(text),
+    });
 
     // 降级使用原始转写文本
     return result.polishedText;
@@ -1160,7 +1269,7 @@ class TypenewApp {
           return;
         }
 
-        const cleaned = cleanupTranscript(text, settings);
+        const cleaned = this.cleanupTranscriptWithDictionary(text, settings, { partial: true });
         if (!cleaned) {
           return;
         }
@@ -1208,7 +1317,7 @@ class TypenewApp {
 
     const finalRawText = this.asrEngine?.finishStreamingSession() ?? '';
     const finalText = ensureStreamingFinalPunctuation(
-      cleanupTranscript(finalRawText || this.streamingLatestText, this.settingsStore.getSettings())
+      this.cleanupTranscriptWithDictionary(finalRawText || this.streamingLatestText, this.settingsStore.getSettings())
     );
     this.streamingLatestText = '';
 

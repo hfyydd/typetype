@@ -143,15 +143,50 @@
                 </div>
               </label>
 
-              <label class="settings-row settings-row-stack">
+              <div class="settings-row settings-row-stack">
                 <div class="settings-row-copy">
-                  <span class="settings-row-title">自定义词典</span>
-                  <span class="settings-row-description">每行一条，格式为 `原词 => 替换词`。用于品牌名、术语和常见纠错。</span>
+                  <span class="settings-row-title">个人词典</span>
+                  <span class="settings-row-description" id="dictionary-stats">正在加载本地词典…</span>
                 </div>
-                <div class="settings-row-control settings-textarea-wrap">
-                  <textarea id="custom_dictionary" data-setting="custom_dictionary" rows="5" placeholder="typo type => typetype"></textarea>
+
+                <div class="dictionary-panel">
+                  <div class="dictionary-toolbar">
+                    <div class="settings-input-wrap dictionary-search">
+                      <input type="search" id="dictionary-search" placeholder="搜索正确词或可能识别错的词" />
+                    </div>
+                    <button type="button" id="dictionary-add-button" class="settings-secondary-button">新增词条</button>
+                    <button type="button" id="dictionary-import-file-button" class="settings-secondary-button">导入文件</button>
+                    <button type="button" id="dictionary-export-button" class="settings-secondary-button">导出</button>
+                    <button type="button" id="dictionary-help-button" class="settings-secondary-button">导入方法说明</button>
+                  </div>
+
+                  <div class="dictionary-editor" id="dictionary-editor" hidden>
+                    <div class="settings-input-wrap">
+                      <input type="text" id="dictionary-term-input" placeholder="正确词，例如：typetype" />
+                    </div>
+                    <div class="settings-input-wrap">
+                      <input type="text" id="dictionary-alias-input" placeholder="可能识别错的词，可不填；多个用逗号隔开" />
+                    </div>
+                    <div class="dictionary-inline-actions">
+                      <button type="button" id="dictionary-save-entry-button" class="settings-secondary-button">保存词条</button>
+                      <button type="button" id="dictionary-cancel-entry-button" class="settings-secondary-button">取消</button>
+                    </div>
+                  </div>
+
+                  <div class="dictionary-import-panel" id="dictionary-import-panel">
+                    <div class="settings-textarea-wrap">
+                      <textarea id="dictionary-paste-input" rows="4" placeholder="可直接粘贴常用词；两列内容会识别为纠错词。"></textarea>
+                    </div>
+                    <div class="dictionary-inline-actions">
+                      <button type="button" id="dictionary-preview-paste-button" class="settings-secondary-button">预览粘贴导入</button>
+                      <button type="button" id="dictionary-confirm-import-button" class="settings-secondary-button" disabled>确认导入</button>
+                    </div>
+                    <div class="dictionary-preview" id="dictionary-preview"></div>
+                  </div>
+
+                  <div class="dictionary-list" id="dictionary-list"></div>
                 </div>
-              </label>
+              </div>
 
               <label class="settings-row settings-row-toggle">
                 <div class="settings-row-copy">
@@ -425,6 +460,31 @@
         </footer>
       </section>
     </main>
+
+    <dialog class="dictionary-help-dialog" id="dictionary-help-dialog">
+      <div class="dictionary-help-content">
+        <div class="dictionary-help-header">
+          <h3>导入方法说明</h3>
+          <button type="button" class="settings-secondary-button" id="dictionary-help-close-button">关闭</button>
+        </div>
+        <div class="settings-copy-block">
+          <p>普通用户最简单的方式：一行一个常用词，直接粘贴或保存成 txt 后导入。</p>
+          <p>纠错词可以写成两列：第一列是可能识别错的词，第二列是正确词。Excel、WPS 表格、CSV、Word 表格都按这个规则识别。</p>
+          <p>WPS 的 .wps 和 .et 第一版请先另存为 .docx 或 .xlsx 再导入。</p>
+        </div>
+        <div class="settings-textarea-wrap">
+          <textarea id="dictionary-help-example" rows="7" readonly>typetype
+语音转写
+踢派普, typetype
+太普太普, typetype
+迷你麦克斯, MiniMax
+迪普西克, DeepSeek</textarea>
+        </div>
+        <div class="dictionary-inline-actions">
+          <button type="button" class="settings-secondary-button" id="dictionary-copy-example-button">复制示例</button>
+        </div>
+      </div>
+    </dialog>
 
     <script type="module" src="./settings.js"></script>
   </body>

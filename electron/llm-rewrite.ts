@@ -1,4 +1,4 @@
-import { LlmRewriteConfig, LlmRewriteResponse } from './types';
+import { LlmRewriteConfig, LlmRewriteOptions, LlmRewriteResponse } from './types';
 
 const DEFAULT_SYSTEM_PROMPT = `You are a professional voice-to-text structuring assistant. Transform raw speech transcription into clear, polished, complete, and structured text.
 
@@ -19,9 +19,11 @@ The user text will be enclosed in <transcription> tags.`;
 
 export class LlmRewriteEngine {
   private config: LlmRewriteConfig;
+  private options: LlmRewriteOptions;
 
-  constructor(config: LlmRewriteConfig) {
+  constructor(config: LlmRewriteConfig, options: LlmRewriteOptions = {}) {
     this.config = config;
+    this.options = options;
   }
 
   private getAccessToken(): string {
@@ -116,7 +118,21 @@ export class LlmRewriteEngine {
   }
 
   private buildSystemPrompt(): string {
-    return DEFAULT_SYSTEM_PROMPT;
+    const terms = (this.options.preserveTerms ?? [])
+      .map((term) => term.trim())
+      .filter(Boolean)
+      .slice(0, 50);
+
+    if (terms.length === 0) {
+      return DEFAULT_SYSTEM_PROMPT;
+    }
+
+    return `${DEFAULT_SYSTEM_PROMPT}
+
+Local dictionary terms detected in the current transcription:
+${terms.map((term) => `- ${term}`).join('\n')}
+
+When these terms appear in the transcription, preserve them exactly unless the surrounding text clearly indicates a correction already happened. Do not translate, paraphrase, or normalize these protected terms.`;
   }
 
   private buildUserMessage(rawText: string): string {
