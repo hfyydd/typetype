@@ -156,6 +156,14 @@ class TypenewApp {
     return this.dictionaryStore.getViewData();
   }
 
+  private setSystemLexiconEnabled(enabled: boolean): DictionaryViewData {
+    return this.dictionaryStore.setSystemLexiconEnabled(enabled);
+  }
+
+  private setSystemLexiconCategoryEnabled(category: string, enabled: boolean): DictionaryViewData {
+    return this.dictionaryStore.setSystemCategoryEnabled(category, enabled);
+  }
+
   private previewDictionaryImport(request: DictionaryImportRequest): Promise<DictionaryImportPreview> {
     return createDictionaryImportPreview(request, this.dictionaryStore.getEntries());
   }
@@ -274,6 +282,8 @@ class TypenewApp {
       (entry) => this.saveDictionaryEntry(entry),
       (id) => this.deleteDictionaryEntry(id),
       (id, enabled) => this.setDictionaryEntryEnabled(id, enabled),
+      (enabled) => this.setSystemLexiconEnabled(enabled),
+      (category, enabled) => this.setSystemLexiconCategoryEnabled(category, enabled),
       (request) => this.previewDictionaryImport(request),
       (preview) => this.commitDictionaryImport(preview),
       () => this.selectDictionaryImportFile(),

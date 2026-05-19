@@ -28,6 +28,8 @@ export interface ElectronAPI {
   saveDictionaryEntry: (entry: Partial<DictionaryEntry>) => Promise<DictionaryViewData>;
   deleteDictionaryEntry: (id: string) => Promise<DictionaryViewData>;
   setDictionaryEntryEnabled: (id: string, enabled: boolean) => Promise<DictionaryViewData>;
+  setSystemLexiconEnabled: (enabled: boolean) => Promise<DictionaryViewData>;
+  setSystemLexiconCategoryEnabled: (category: string, enabled: boolean) => Promise<DictionaryViewData>;
   previewDictionaryImport: (request: DictionaryImportRequest) => Promise<DictionaryImportPreview>;
   commitDictionaryImport: (preview: DictionaryImportPreview) => Promise<DictionaryViewData>;
   selectDictionaryImportFile: () => Promise<DictionaryImportPreview | null>;
@@ -54,6 +56,8 @@ const api: ElectronAPI = {
   saveDictionaryEntry: (entry: Partial<DictionaryEntry>) => ipcRenderer.invoke('save_dictionary_entry', entry),
   deleteDictionaryEntry: (id: string) => ipcRenderer.invoke('delete_dictionary_entry', id),
   setDictionaryEntryEnabled: (id: string, enabled: boolean) => ipcRenderer.invoke('set_dictionary_entry_enabled', { id, enabled }),
+  setSystemLexiconEnabled: (enabled: boolean) => ipcRenderer.invoke('set_system_lexicon_enabled', enabled),
+  setSystemLexiconCategoryEnabled: (category: string, enabled: boolean) => ipcRenderer.invoke('set_system_lexicon_category_enabled', { category, enabled }),
   previewDictionaryImport: (request: DictionaryImportRequest) => ipcRenderer.invoke('preview_dictionary_import', request),
   commitDictionaryImport: (preview: DictionaryImportPreview) => ipcRenderer.invoke('commit_dictionary_import', preview),
   selectDictionaryImportFile: () => ipcRenderer.invoke('select_dictionary_import_file'),

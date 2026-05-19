@@ -51,13 +51,15 @@ export interface DictionaryStats {
   terms: number;
   replacements: number;
   system_terms: number;
+  system_enabled_terms: number;
 }
 
 export interface DictionaryViewData {
   entries: DictionaryEntry[];
   dictionary_path: string;
   system_lexicon_count: number;
-  system_categories: Array<{ category: string; count: number }>;
+  system_lexicon_enabled: boolean;
+  system_categories: Array<{ category: string; count: number; enabled: boolean }>;
   stats: DictionaryStats;
 }
 

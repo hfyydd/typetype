@@ -417,11 +417,62 @@ body {
 }
 
 .dictionary-editor,
-.dictionary-import-panel {
+.dictionary-import-panel,
+.system-lexicon-panel {
   padding: 12px;
   border: 1px solid rgba(24, 33, 43, 0.08);
   border-radius: 12px;
   background: #fff;
+}
+
+.system-lexicon-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.system-lexicon-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+}
+
+.system-lexicon-categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.system-lexicon-category {
+  display: inline-grid;
+  grid-template-columns: auto minmax(0, auto) auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 1px solid rgba(24, 33, 43, 0.09);
+  border-radius: 999px;
+  background: #f9fafb;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.system-lexicon-category input {
+  width: 14px;
+  height: 14px;
+}
+
+.system-lexicon-category em {
+  color: var(--muted);
+  font-style: normal;
+  font-size: 11px;
+}
+
+.system-lexicon-category:has(input:not(:checked)),
+.system-lexicon-category:has(input:disabled) {
+  color: var(--muted);
+  background: rgba(97, 112, 127, 0.06);
 }
 
 .dictionary-inline-actions,

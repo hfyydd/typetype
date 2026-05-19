@@ -24,6 +24,8 @@ interface DictionaryStoreOptions {
 interface PersistedDictionaryFile {
   version: 1;
   entries: DictionaryEntry[];
+  system_lexicon_enabled?: boolean;
+  disabled_system_categories?: string[];
 }
 
 export class DictionaryStore {
@@ -33,6 +35,8 @@ export class DictionaryStore {
   private systemLexiconPath: string;
   private entries: DictionaryEntry[] = [];
   private systemLexicon: SystemLexiconEntry[] = [];
+  private systemLexiconEnabled = true;
+  private disabledSystemCategories = new Set<string>();
 
   constructor(options: DictionaryStoreOptions) {
     this.dataDir = options.dataDir;
@@ -40,7 +44,7 @@ export class DictionaryStore {
     this.dictionaryPath = path.join(this.dataDir, 'dictionary.json');
     this.systemLexiconPath = path.join(this.resourcesPath, 'lexicons', 'system-lexicon.json');
     this.systemLexicon = this.loadSystemLexicon();
-    this.entries = this.loadUserEntries();
+    this.loadPersistedDictionary();
     this.migrateLegacyCustomDictionary(options.legacyCustomDictionary ?? []);
   }
 
@@ -61,9 +65,27 @@ export class DictionaryStore {
       entries: this.getEntries(),
       dictionary_path: this.dictionaryPath,
       system_lexicon_count: this.systemLexicon.length,
+      system_lexicon_enabled: this.systemLexiconEnabled,
       system_categories: this.getSystemCategories(),
       stats: this.getStats(),
     };
+  }
+
+  setSystemLexiconEnabled(enabled: boolean): DictionaryViewData {
+    this.systemLexiconEnabled = enabled;
+    this.saveUserEntries();
+    return this.getViewData();
+  }
+
+  setSystemCategoryEnabled(category: string, enabled: boolean): DictionaryViewData {
+    if (enabled) {
+      this.disabledSystemCategories.delete(category);
+    } else {
+      this.disabledSystemCategories.add(category);
+    }
+
+    this.saveUserEntries();
+    return this.getViewData();
   }
 
   saveEntry(input: Partial<DictionaryEntry>): DictionaryEntry {
@@ -148,6 +170,8 @@ export class DictionaryStore {
     const data: PersistedDictionaryFile = {
       version: 1,
       entries: this.entries,
+      system_lexicon_enabled: this.systemLexiconEnabled,
+      disabled_system_categories: Array.from(this.disabledSystemCategories).sort((a, b) => a.localeCompare(b, 'zh-CN')),
     };
     fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
   }
@@ -157,22 +181,29 @@ export class DictionaryStore {
   }
 
   getMatchedTerms(text: string, limit = 50): string[] {
-    return findMatchedDictionaryTerms(text, this.entries, this.systemLexicon, limit);
+    return findMatchedDictionaryTerms(text, this.entries, this.getEnabledSystemLexicon(), limit);
   }
 
-  private loadUserEntries(): DictionaryEntry[] {
+  private loadPersistedDictionary(): void {
     try {
       if (!fs.existsSync(this.dictionaryPath)) {
-        return [];
+        this.entries = [];
+        this.systemLexiconEnabled = true;
+        this.disabledSystemCategories = new Set();
+        return;
       }
 
       const parsed = JSON.parse(fs.readFileSync(this.dictionaryPath, 'utf-8')) as Partial<PersistedDictionaryFile>;
-      return (parsed.entries ?? [])
+      this.entries = (parsed.entries ?? [])
         .map((entry) => sanitizeDictionaryEntry(entry))
         .filter((entry) => validateDictionaryEntry(entry).ok);
+      this.systemLexiconEnabled = parsed.system_lexicon_enabled ?? true;
+      this.disabledSystemCategories = new Set(parsed.disabled_system_categories ?? []);
     } catch (error) {
       console.error('Failed to load dictionary:', error);
-      return [];
+      this.entries = [];
+      this.systemLexiconEnabled = true;
+      this.disabledSystemCategories = new Set();
     }
   }
 
@@ -181,6 +212,8 @@ export class DictionaryStore {
     const data: PersistedDictionaryFile = {
       version: 1,
       entries: this.entries,
+      system_lexicon_enabled: this.systemLexiconEnabled,
+      disabled_system_categories: Array.from(this.disabledSystemCategories).sort((a, b) => a.localeCompare(b, 'zh-CN')),
     };
     fs.writeFileSync(this.dictionaryPath, JSON.stringify(data, null, 2), 'utf-8');
   }
@@ -241,17 +274,30 @@ export class DictionaryStore {
       terms: this.entries.filter((entry) => entry.kind === 'term').length,
       replacements: this.entries.filter((entry) => entry.kind === 'replacement').length,
       system_terms: this.systemLexicon.length,
+      system_enabled_terms: this.getEnabledSystemLexicon().length,
     };
   }
 
-  private getSystemCategories(): Array<{ category: string; count: number }> {
+  private getSystemCategories(): Array<{ category: string; count: number; enabled: boolean }> {
     const counts = new Map<string, number>();
     for (const entry of this.systemLexicon) {
       counts.set(entry.category, (counts.get(entry.category) ?? 0) + 1);
     }
 
     return Array.from(counts.entries())
-      .map(([category, count]) => ({ category, count }))
+      .map(([category, count]) => ({
+        category,
+        count,
+        enabled: !this.disabledSystemCategories.has(category),
+      }))
       .sort((a, b) => a.category.localeCompare(b.category, 'zh-CN'));
+  }
+
+  private getEnabledSystemLexicon(): SystemLexiconEntry[] {
+    if (!this.systemLexiconEnabled) {
+      return [];
+    }
+
+    return this.systemLexicon.filter((entry) => !this.disabledSystemCategories.has(entry.category));
   }
 }

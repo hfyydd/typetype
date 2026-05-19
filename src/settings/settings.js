@@ -28,6 +28,9 @@ const dictionaryImportFileButton = document.querySelector("#dictionary-import-fi
 const dictionaryConfirmImportButton = document.querySelector("#dictionary-confirm-import-button");
 const dictionaryExportButton = document.querySelector("#dictionary-export-button");
 const dictionaryPreview = document.querySelector("#dictionary-preview");
+const systemLexiconToggle = document.querySelector("#system-lexicon-toggle");
+const systemLexiconCategories = document.querySelector("#system-lexicon-categories");
+const systemLexiconDescription = document.querySelector("#system-lexicon-description");
 const dictionaryHelpButton = document.querySelector("#dictionary-help-button");
 const dictionaryHelpDialog = document.querySelector("#dictionary-help-dialog");
 const dictionaryHelpCloseButton = document.querySelector("#dictionary-help-close-button");
@@ -337,7 +340,8 @@ function renderDictionaryView() {
   }
 
   const stats = dictionaryView.stats;
-  dictionaryStats.textContent = `个人词典 ${stats.total} 条，已启用 ${stats.enabled} 条；纠错词 ${stats.replacements} 条，常用词 ${stats.terms} 条；内置基础词库 ${stats.system_terms} 条。`;
+  dictionaryStats.textContent = `个人词典 ${stats.total} 条，已启用 ${stats.enabled} 条；纠错词 ${stats.replacements} 条，常用词 ${stats.terms} 条；系统基础词库启用 ${stats.system_enabled_terms}/${stats.system_terms} 条。`;
+  renderSystemLexiconControls();
 
   const query = dictionarySearchInput.value.trim().toLocaleLowerCase();
   const visibleEntries = dictionaryView.entries.filter((entry) => {
@@ -377,6 +381,27 @@ function renderDictionaryView() {
         </article>
       `;
     })
+    .join("");
+}
+
+function renderSystemLexiconControls() {
+  if (!dictionaryView) {
+    return;
+  }
+
+  systemLexiconToggle.checked = Boolean(dictionaryView.system_lexicon_enabled);
+  systemLexiconDescription.textContent = dictionaryView.system_lexicon_enabled
+    ? "系统基础词库为只读词库，仅用于术语保护和润写保留，不会上传，不会强制替换原文。"
+    : "系统基础词库已关闭；个人词典仍会继续生效。";
+
+  systemLexiconCategories.innerHTML = (dictionaryView.system_categories ?? [])
+    .map((item) => `
+      <label class="system-lexicon-category" title="${escapeHtml(item.category)}">
+        <input type="checkbox" data-category="${escapeHtml(item.category)}" ${item.enabled ? "checked" : ""} ${dictionaryView.system_lexicon_enabled ? "" : "disabled"} />
+        <span>${escapeHtml(item.category)}</span>
+        <em>${item.count}</em>
+      </label>
+    `)
     .join("");
 }
 
@@ -727,6 +752,31 @@ dictionaryConfirmImportButton.addEventListener("click", () => {
 });
 dictionaryExportButton.addEventListener("click", () => {
   void exportDictionary();
+});
+systemLexiconToggle.addEventListener("change", async () => {
+  try {
+    dictionaryView = await electronAPI.setSystemLexiconEnabled(systemLexiconToggle.checked);
+    renderDictionaryView();
+    setStatus(systemLexiconToggle.checked ? "系统基础词库已启用。" : "系统基础词库已关闭，个人词典仍然生效。");
+  } catch (error) {
+    setStatus(error?.message || "系统基础词库设置失败。", "error");
+    await loadDictionaryView();
+  }
+});
+systemLexiconCategories.addEventListener("change", async (event) => {
+  const checkbox = event.target.closest("input[data-category]");
+  if (!checkbox) {
+    return;
+  }
+
+  try {
+    dictionaryView = await electronAPI.setSystemLexiconCategoryEnabled(checkbox.dataset.category, checkbox.checked);
+    renderDictionaryView();
+    setStatus(`${checkbox.dataset.category} 词库已${checkbox.checked ? "启用" : "关闭"}。`);
+  } catch (error) {
+    setStatus(error?.message || "系统词库分类设置失败。", "error");
+    await loadDictionaryView();
+  }
 });
 dictionaryHelpButton.addEventListener("click", () => {
   dictionaryHelpDialog.showModal();

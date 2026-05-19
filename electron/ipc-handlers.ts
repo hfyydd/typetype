@@ -29,6 +29,8 @@ export function registerIpcHandlers(
   saveDictionaryEntry: (entry: Partial<DictionaryEntry>) => DictionaryViewData,
   deleteDictionaryEntry: (id: string) => DictionaryViewData,
   setDictionaryEntryEnabled: (id: string, enabled: boolean) => DictionaryViewData,
+  setSystemLexiconEnabled: (enabled: boolean) => DictionaryViewData,
+  setSystemLexiconCategoryEnabled: (category: string, enabled: boolean) => DictionaryViewData,
   previewDictionaryImport: (request: DictionaryImportRequest) => Promise<DictionaryImportPreview>,
   commitDictionaryImport: (preview: DictionaryImportPreview) => DictionaryViewData,
   selectDictionaryImportFile: () => Promise<DictionaryImportPreview | null>,
@@ -51,6 +53,8 @@ export function registerIpcHandlers(
   ipcMain.handle('save_dictionary_entry', (_event, entry) => saveDictionaryEntry(entry));
   ipcMain.handle('delete_dictionary_entry', (_event, id) => deleteDictionaryEntry(id));
   ipcMain.handle('set_dictionary_entry_enabled', (_event, { id, enabled }) => setDictionaryEntryEnabled(id, enabled));
+  ipcMain.handle('set_system_lexicon_enabled', (_event, enabled) => setSystemLexiconEnabled(enabled));
+  ipcMain.handle('set_system_lexicon_category_enabled', (_event, { category, enabled }) => setSystemLexiconCategoryEnabled(category, enabled));
   ipcMain.handle('preview_dictionary_import', (_event, request) => previewDictionaryImport(request));
   ipcMain.handle('commit_dictionary_import', (_event, preview) => commitDictionaryImport(preview));
   ipcMain.handle('select_dictionary_import_file', () => selectDictionaryImportFile());
