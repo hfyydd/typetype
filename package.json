@@ -47,7 +47,8 @@
         "to": "resources",
         "filter": [
           "**/*",
-          "!models/**"
+          "!models/**",
+          "!translation-models/**"
         ]
       }
     ],
@@ -60,6 +61,13 @@
           "!**/README.md",
           "!**/test_wavs",
           "!**/test_wavs/**"
+        ]
+      },
+      {
+        "from": "resources/translation-models",
+        "to": "translation-models",
+        "filter": [
+          "**/*"
         ]
       }
     ],
