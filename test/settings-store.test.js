@@ -6,6 +6,12 @@ const path = require("node:path");
 
 const { SettingsStore } = require("../dist-electron/settings-store.js");
 
+function configDirForHome(homeDir) {
+  return process.platform === "win32"
+    ? path.join(homeDir, "AppData", "Roaming")
+    : path.join(homeDir, ".config");
+}
+
 test("SettingsStore stores data under the typetype app directory", () => {
   const originalHomedir = os.homedir;
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "typetype-home-"));
@@ -14,7 +20,7 @@ test("SettingsStore stores data under the typetype app directory", () => {
   try {
     const store = new SettingsStore();
     assert.match(store.getDataDir(), /typetype$/);
-    assert.match(store.getSettingsPath(), /typetype\/settings\.toml$/);
+    assert.equal(store.getSettingsPath(), path.join(configDirForHome(tempHome), "typetype", "settings.toml"));
     assert.equal("writing_profile" in store.getSettings(), false);
     assert.equal("llm_polish_enabled" in store.getSettings(), false);
     assert.equal("llm_base_url" in store.getSettings(), false);
@@ -31,16 +37,19 @@ test("SettingsStore stores data under the typetype app directory", () => {
   }
 });
 
-test("settings UI does not expose LLM polish controls", () => {
+test("settings UI exposes current LLM rewrite controls without legacy polish fields", () => {
   const html = fs.readFileSync(path.join(__dirname, "../src/settings/index.html"), "utf8");
   const script = fs.readFileSync(path.join(__dirname, "../src/settings/settings.js"), "utf8");
 
   assert.equal(html.includes('id="llm_polish_enabled"'), false);
-  assert.equal(html.includes('id="llm_base_url"'), false);
-  assert.equal(html.includes('id="llm_model"'), false);
+  assert.equal(html.includes('id="llm_base_url"'), true);
+  assert.equal(html.includes('id="llm_model"'), true);
   assert.equal(html.includes("LLM 润色"), false);
+  assert.equal(html.includes("LLM 润写"), true);
   assert.equal(script.includes("llmPolishToggle"), false);
   assert.equal(script.includes("llm_polish_enabled"), false);
+  assert.equal(script.includes("llmBaseUrlInput"), true);
+  assert.equal(script.includes("llmModelInput"), true);
   assert.equal(html.includes('id="launch_at_login"'), true);
   assert.equal(script.includes("launchAtLoginToggle"), true);
   assert.equal(html.includes('id="translate_hotkey"'), true);
@@ -68,8 +77,9 @@ test("settings UI no longer exposes writing profile controls", () => {
 test("SettingsStore migrates legacy typenew settings into the typetype directory", () => {
   const originalHomedir = os.homedir;
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "typetype-home-"));
-  const legacyDir = path.join(tempHome, ".config", "typenew");
-  const currentDir = path.join(tempHome, ".config", "typetype");
+  const configDir = configDirForHome(tempHome);
+  const legacyDir = path.join(configDir, "typenew");
+  const currentDir = path.join(configDir, "typetype");
 
   fs.mkdirSync(legacyDir, { recursive: true });
   fs.writeFileSync(

@@ -29,6 +29,14 @@ function dictationHotkeyForPlatform() {
   return { value: "CtrlSlash", accelerator: "Control+/" };
 }
 
+function expectedDictationAccelerators() {
+  return process.platform === "win32" ? ["Control+/", "F8"] : ["Control+/"];
+}
+
+function expectedTranslationAccelerators() {
+  return process.platform === "win32" ? ["Control+.", "F9"] : ["Control+."];
+}
+
 test("ShortcutManager unregisters only the requested managed accelerator", () => {
   const calls = [];
   const translationHotkey = translationHotkeyForPlatform();
@@ -57,9 +65,9 @@ test("ShortcutManager unregisters only the requested managed accelerator", () =>
   manager.unregister("dictation");
 
   assert.deepEqual(calls, [
-    ["register", dictationHotkey.accelerator, "function"],
-    ["register", translationHotkey.accelerator, "function"],
-    ["unregister", dictationHotkey.accelerator],
+    ...expectedDictationAccelerators().map((accelerator) => ["register", accelerator, "function"]),
+    ...expectedTranslationAccelerators().map((accelerator) => ["register", accelerator, "function"]),
+    ...expectedDictationAccelerators().map((accelerator) => ["unregister", accelerator]),
   ]);
 });
 
@@ -86,10 +94,13 @@ test("ShortcutManager unregisterAll only clears shortcuts it registered", () => 
   manager.register("translation", translationHotkey.value, () => {});
   manager.unregisterAll();
 
-  assert.deepEqual(calls, [dictationHotkey.accelerator, translationHotkey.accelerator]);
+  assert.deepEqual(calls, [
+    ...expectedDictationAccelerators(),
+    ...expectedTranslationAccelerators(),
+  ]);
 });
 
-test("ShortcutManager does not fall back for Ctrl+. on Windows when registration fails", () => {
+test("ShortcutManager falls back to F9 for Ctrl+. on Windows when registration fails", () => {
   if (process.platform !== "win32") {
     return;
   }
@@ -98,7 +109,7 @@ test("ShortcutManager does not fall back for Ctrl+. on Windows when registration
   const globalShortcutMock = {
     register(accelerator) {
       calls.push(accelerator);
-      return accelerator === "CommandOrControl+Shift+V";
+      return accelerator === "F9";
     },
     unregister() {},
     isRegistered() {
@@ -109,7 +120,104 @@ test("ShortcutManager does not fall back for Ctrl+. on Windows when registration
   const { ShortcutManager } = loadShortcutManagerWithMock(globalShortcutMock);
   const manager = new ShortcutManager();
 
-  assert.equal(manager.register("translation", "CtrlDot", () => {}), false);
-  assert.equal(manager.getCurrentHotkey("translation"), null);
-  assert.deepEqual(calls, ["Control+."]);
+  assert.equal(manager.register("translation", "CtrlDot", () => {}), true);
+  assert.equal(manager.getCurrentHotkey("translation"), "F9");
+  assert.deepEqual(calls, ["Control+.", "F9"]);
+});
+
+test("ShortcutManager falls back to F8 for Ctrl+/ on Windows when registration fails", () => {
+  if (process.platform !== "win32") {
+    return;
+  }
+
+  const calls = [];
+  const globalShortcutMock = {
+    register(accelerator) {
+      calls.push(accelerator);
+      return accelerator === "F8";
+    },
+    unregister() {},
+    isRegistered() {
+      return false;
+    },
+  };
+
+  const { ShortcutManager } = loadShortcutManagerWithMock(globalShortcutMock);
+  const manager = new ShortcutManager();
+
+  assert.equal(manager.register("dictation", "CtrlSlash", () => {}), true);
+  assert.equal(manager.getCurrentHotkey("dictation"), "F8");
+  assert.deepEqual(calls, ["Control+/", "F8"]);
+});
+
+test("ShortcutManager registers both Ctrl+/ and F8 on Windows when available", () => {
+  if (process.platform !== "win32") {
+    return;
+  }
+
+  const calls = [];
+  const globalShortcutMock = {
+    register(accelerator) {
+      calls.push(accelerator);
+      return true;
+    },
+    unregister() {},
+    isRegistered() {
+      return false;
+    },
+  };
+
+  const { ShortcutManager } = loadShortcutManagerWithMock(globalShortcutMock);
+  const manager = new ShortcutManager();
+
+  assert.equal(manager.register("dictation", "CtrlSlash", () => {}), true);
+  assert.equal(manager.getCurrentHotkey("dictation"), "CtrlSlash,F8");
+  assert.deepEqual(calls, ["Control+/", "F8"]);
+});
+
+test("ShortcutManager can suppress fallback hotkeys reserved by another action", () => {
+  if (process.platform !== "win32") {
+    return;
+  }
+
+  const calls = [];
+  const globalShortcutMock = {
+    register(accelerator) {
+      calls.push(accelerator);
+      return true;
+    },
+    unregister() {},
+    isRegistered() {
+      return false;
+    },
+  };
+
+  const { ShortcutManager } = loadShortcutManagerWithMock(globalShortcutMock);
+  const manager = new ShortcutManager();
+
+  assert.equal(
+    manager.register("dictation", "CtrlSlash", () => {}, { disabledFallbackHotkeys: ["F8"] }),
+    true
+  );
+  assert.equal(manager.getCurrentHotkey("dictation"), "CtrlSlash");
+  assert.deepEqual(calls, ["Control+/"]);
+});
+
+test("ShortcutManager exposes Windows dictation and translation shortcuts", () => {
+  if (process.platform !== "win32") {
+    return;
+  }
+
+  const { ShortcutManager } = loadShortcutManagerWithMock({
+    register() { return true; },
+    unregister() {},
+    isRegistered() { return false; },
+  });
+
+  const values = new ShortcutManager().getAvailableShortcuts().map((shortcut) => shortcut.value);
+
+  assert.equal(values.includes("CtrlSlash"), true);
+  assert.equal(values.includes("CtrlDot"), true);
+  assert.equal(values.includes("F8"), true);
+  assert.equal(values.includes("F9"), true);
 });

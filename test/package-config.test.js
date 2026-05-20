@@ -13,6 +13,7 @@ test("electron-builder does not package models twice", () => {
   assert.deepEqual(resourcesEntry?.filter, [
     "**/*",
     "!models/**",
+    "!translation-models/**",
   ]);
 });
 
@@ -23,6 +24,7 @@ test("electron-builder excludes bundled model sample assets from packaged output
   assert.deepEqual(resourcesEntry?.filter, [
     "**/*",
     "!models/**",
+    "!translation-models/**",
   ]);
   assert.deepEqual(modelEntry?.filter, [
     "**/*",

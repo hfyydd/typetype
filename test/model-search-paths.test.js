@@ -1,5 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const path = require("node:path");
 
 const { getModelSearchPaths } = require("../dist-electron/model-search-paths.js");
 
@@ -13,5 +14,5 @@ test("getModelSearchPaths only returns app-scoped model directories", () => {
   assert.deepEqual(paths, [
     "/tmp/typetype-data/models",
     "/Applications/typetype.app/Contents/Resources/models",
-  ]);
+  ].map((item) => path.normalize(item)));
 });

@@ -45,6 +45,7 @@ import { testLlmConnection } from './llm-rewrite';
 import { rewriteWithPreferredLlm } from './llm-route';
 import { StreamingSegmenter } from './streaming-segmentation';
 import { ensureStreamingFinalPunctuation, prefixStreamingBoundaryPunctuation } from './streaming-punctuation';
+import { applyBasicTranscriptPunctuation } from './transcript-punctuation';
 import { DictionaryStore } from './dictionary-store';
 import { createDictionaryImportPreview } from './dictionary-import';
 
@@ -573,12 +574,22 @@ class TypenewApp {
 
     this.shortcutManager.unregisterAll();
 
-    const dictationSuccess = this.shortcutManager.register('dictation', settings.hotkey, () => {
-      this.handleShortcutToggle('dictation');
-    });
-    const translationSuccess = this.shortcutManager.register('translation', settings.translate_hotkey, () => {
-      this.handleShortcutToggle('translation');
-    });
+    const dictationSuccess = this.shortcutManager.register(
+      'dictation',
+      settings.hotkey,
+      () => {
+        this.handleShortcutToggle('dictation');
+      },
+      { disabledFallbackHotkeys: [settings.translate_hotkey] }
+    );
+    const translationSuccess = this.shortcutManager.register(
+      'translation',
+      settings.translate_hotkey,
+      () => {
+        this.handleShortcutToggle('translation');
+      },
+      { disabledFallbackHotkeys: [settings.hotkey] }
+    );
 
     console.log('Global shortcut registration', {
       dictation: {
@@ -593,8 +604,12 @@ class TypenewApp {
       },
     });
 
-    if (!dictationSuccess || !translationSuccess) {
-      throw new Error('全局快捷键注册失败，请更换快捷键组合后再试。');
+    if (!dictationSuccess) {
+      throw new Error('语音输入快捷键注册失败，请更换快捷键组合后再试。');
+    }
+
+    if (!translationSuccess) {
+      console.warn('Translation shortcut registration failed; dictation shortcut remains active');
     }
   }
 
@@ -1076,7 +1091,8 @@ class TypenewApp {
       if (this.activeCaptureIntent === 'translation') {
         finalText = await this.translateTranscript(cleanedTranscript);
       } else {
-        finalText = await this.rewriteWithLlm(cleanedTranscript) || cleanedTranscript;
+        finalText = await this.rewriteWithLlm(cleanedTranscript)
+          || applyBasicTranscriptPunctuation(cleanedTranscript);
         finalText = this.stateMachine.finishOutput(finalText);
       }
       console.log('[translation-debug] final-output', {
