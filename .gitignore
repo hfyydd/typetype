@@ -1,6 +1,7 @@
 node_modules/
 dist-electron/
 release/
+release-dictionary/
 .omx/
 .DS_Store
 .claude/

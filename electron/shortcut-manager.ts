@@ -8,15 +8,26 @@ export interface ShortcutOption {
   accelerator: string;
 }
 
+export interface ShortcutRegisterOptions {
+  disabledFallbackHotkeys?: string[];
+}
+
+interface ShortcutRegistration {
+  accelerators: string[];
+  hotkey: string;
+  activeHotkeys: string[];
+}
+
 export class ShortcutManager {
-  private registrations = new Map<string, { accelerator: string; hotkey: string }>();
+  private registrations = new Map<string, ShortcutRegistration>();
 
   getAvailableShortcuts(): ShortcutOption[] {
     if (process.platform === 'win32') {
       return [
-        { value: 'CtrlSlash', label: 'Ctrl + /', accelerator: 'Control+/' },
-        { value: 'CtrlDot', label: 'Ctrl + .', accelerator: 'Control+.' },
-        { value: 'F8', label: 'F8', accelerator: 'F8' },
+        { value: 'CtrlSlash', label: 'Ctrl + /（备用 F8）', accelerator: 'Control+/' },
+        { value: 'CtrlDot', label: 'Ctrl + .（备用 F9）', accelerator: 'Control+.' },
+        { value: 'F8', label: 'F8（语音输入备用）', accelerator: 'F8' },
+        { value: 'F9', label: 'F9（翻译备用）', accelerator: 'F9' },
       ];
     } else {
       return [
@@ -36,48 +47,83 @@ export class ShortcutManager {
     return found?.accelerator ?? null;
   }
 
-  register(actionId: string, hotkey: string, onToggle: ShortcutHandler): boolean {
+  register(
+    actionId: string,
+    hotkey: string,
+    onToggle: ShortcutHandler,
+    options: ShortcutRegisterOptions = {}
+  ): boolean {
     this.unregister(actionId);
 
-    const accelerator = this.acceleratorForHotkey(hotkey);
-    if (!accelerator) {
+    const hotkeys = this.getCandidateHotkeys(hotkey, options.disabledFallbackHotkeys ?? []);
+    if (hotkeys.length === 0) {
       console.error('Invalid hotkey:', hotkey);
       return false;
     }
 
+    const registeredAccelerators: string[] = [];
+    const activeHotkeys: string[] = [];
+
     try {
-      let success = globalShortcut.register(accelerator, () => {
-        onToggle();
-      });
+      for (const candidateHotkey of hotkeys) {
+        const accelerator = this.acceleratorForHotkey(candidateHotkey);
+        if (!accelerator) {
+          continue;
+        }
 
-      if (!success && process.platform === 'win32' && hotkey === 'CtrlSlash') {
-        const fallback = this.acceleratorForHotkey('F8');
-        if (fallback) {
-          success = globalShortcut.register(fallback, () => {
-            onToggle();
+        if (globalShortcut.isRegistered(accelerator)) {
+          console.warn('Shortcut accelerator is already registered, skipping', {
+            actionId,
+            hotkey: candidateHotkey,
+            accelerator,
           });
+          continue;
+        }
 
-          if (success) {
-            console.warn('Falling back to F8 because Ctrl+/ could not be registered on Windows');
-            this.registrations.set(actionId, {
-              accelerator: fallback,
-              hotkey: 'F8',
-            });
-            return true;
-          }
+        const success = globalShortcut.register(accelerator, () => {
+          onToggle();
+        });
+
+        if (success) {
+          registeredAccelerators.push(accelerator);
+          activeHotkeys.push(candidateHotkey);
+        } else {
+          console.warn('Failed to register shortcut accelerator', {
+            actionId,
+            hotkey: candidateHotkey,
+            accelerator,
+          });
         }
       }
 
-      if (success) {
-        this.registrations.set(actionId, {
-          accelerator,
-          hotkey,
+      if (registeredAccelerators.length === 0) {
+        return false;
+      }
+
+      this.registrations.set(actionId, {
+        accelerators: registeredAccelerators,
+        hotkey,
+        activeHotkeys,
+      });
+
+      if (process.platform === 'win32' && activeHotkeys.length > 1) {
+        console.log('Registered Windows shortcut fallback', {
+          actionId,
+          requested: hotkey,
+          active: activeHotkeys,
         });
       }
 
-      return success;
+      return true;
     } catch (e) {
       console.error('Failed to register shortcut:', e);
+      for (const accelerator of registeredAccelerators) {
+        try {
+          globalShortcut.unregister(accelerator);
+        } catch {
+          // Ignore cleanup errors.
+        }
+      }
       return false;
     }
   }
@@ -89,7 +135,9 @@ export class ShortcutManager {
     }
 
     try {
-      globalShortcut.unregister(registration.accelerator);
+      for (const accelerator of registration.accelerators) {
+        globalShortcut.unregister(accelerator);
+      }
     } catch (e) {
       // Ignore errors during cleanup
     }
@@ -104,12 +152,47 @@ export class ShortcutManager {
   }
 
   isRegistered(hotkey: string): boolean {
-    const accelerator = this.acceleratorForHotkey(hotkey);
-    if (!accelerator) return false;
-    return globalShortcut.isRegistered(accelerator);
+    return this.getCandidateHotkeys(hotkey).some((candidateHotkey) => {
+      const accelerator = this.acceleratorForHotkey(candidateHotkey);
+      return accelerator ? globalShortcut.isRegistered(accelerator) : false;
+    });
   }
 
   getCurrentHotkey(actionId: string): string | null {
-    return this.registrations.get(actionId)?.hotkey ?? null;
+    return this.registrations.get(actionId)?.activeHotkeys.join(',') ?? null;
+  }
+
+  private getCandidateHotkeys(hotkey: string, disabledFallbackHotkeys: string[] = []): string[] {
+    const accelerator = this.acceleratorForHotkey(hotkey);
+    if (!accelerator) {
+      return [];
+    }
+
+    const disabled = new Set(disabledFallbackHotkeys);
+    const candidates = [hotkey];
+
+    for (const fallback of this.getFallbackHotkeys(hotkey)) {
+      if (!disabled.has(fallback) && !candidates.includes(fallback)) {
+        candidates.push(fallback);
+      }
+    }
+
+    return candidates;
+  }
+
+  private getFallbackHotkeys(hotkey: string): string[] {
+    if (process.platform !== 'win32') {
+      return [];
+    }
+
+    if (hotkey === 'CtrlSlash') {
+      return ['F8'];
+    }
+
+    if (hotkey === 'CtrlDot') {
+      return ['F9'];
+    }
+
+    return [];
   }
 }

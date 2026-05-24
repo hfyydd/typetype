@@ -16,9 +16,11 @@
     "@huggingface/transformers": "^4.2.0",
     "@iarna/toml": "^2.2.5",
     "bzip2": "^0.1.1",
+    "mammoth": "^1.12.0",
     "sherpa-onnx-node": "^1.12.39",
     "sherpa-onnx-win-x64": "^1.12.39",
-    "tar-stream": "^3.2.0"
+    "tar-stream": "^3.2.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
@@ -29,6 +31,8 @@
   "build": {
     "appId": "app.typetype",
     "productName": "typetype",
+    "electronDist": "node_modules/electron/dist",
+    "afterPack": "scripts/after-pack-rcedit.cjs",
     "directories": {
       "output": "release"
     },
@@ -45,7 +49,9 @@
         "to": "resources",
         "filter": [
           "**/*",
-          "!models/**"
+          "!models/**",
+          "!translation-models/**",
+          "!runtimes/**"
         ]
       }
     ],
@@ -59,6 +65,20 @@
           "!**/test_wavs",
           "!**/test_wavs/**"
         ]
+      },
+      {
+        "from": "resources/translation-models",
+        "to": "translation-models",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/runtimes",
+        "to": "runtimes",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "mac": {
@@ -71,10 +91,9 @@
     },
     "win": {
       "target": [
-        "nsis",
-        "portable",
-        "7z"
+        "nsis"
       ],
+      "signAndEditExecutable": false,
       "electronLanguages": [
         "zh-CN",
         "en-US"

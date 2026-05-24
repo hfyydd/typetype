@@ -1,5 +1,5 @@
 import { LlmRewriteEngine } from './llm-rewrite';
-import { LlmRewriteConfig, Settings } from './types';
+import { LlmRewriteConfig, LlmRewriteOptions, Settings } from './types';
 
 export type LlmRewriteRouteSource = 'api-key';
 
@@ -13,8 +13,9 @@ interface RewriteEngineLike {
 }
 
 export interface LlmRewriteRouteDeps {
-  createEngine?: (config: LlmRewriteConfig) => RewriteEngineLike;
+  createEngine?: (config: LlmRewriteConfig, options?: LlmRewriteOptions) => RewriteEngineLike;
   logger?: Pick<Console, 'log' | 'error'>;
+  preserveTerms?: string[];
 }
 
 export async function rewriteWithPreferredLlm(
@@ -29,12 +30,12 @@ export async function rewriteWithPreferredLlm(
   }
 
   const hasApiConfig = Boolean(apiConfig.api_key?.trim());
-  const createEngine = deps.createEngine ?? ((config) => new LlmRewriteEngine(config));
+  const createEngine = deps.createEngine ?? ((config, options) => new LlmRewriteEngine(config, options));
   const logger = deps.logger ?? console;
 
   if (hasApiConfig) {
     try {
-      const result = await createEngine(apiConfig).rewrite(text);
+      const result = await createEngine(apiConfig, { preserveTerms: deps.preserveTerms ?? [] }).rewrite(text);
       logger.log('[llm-rewrite] success via API key config', {
         provider: apiConfig.provider,
         model: apiConfig.model,

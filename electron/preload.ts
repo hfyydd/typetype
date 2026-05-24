@@ -1,5 +1,15 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { UiSnapshot, SettingsViewData, Settings, AsrDiagnostics, LlmRewriteConfig } from './types';
+import {
+  UiSnapshot,
+  SettingsViewData,
+  Settings,
+  AsrDiagnostics,
+  LlmRewriteConfig,
+  DictionaryEntry,
+  DictionaryImportPreview,
+  DictionaryImportRequest,
+  DictionaryViewData,
+} from './types';
 
 export interface ElectronAPI {
   getSettingsViewData: () => Promise<SettingsViewData>;
@@ -14,6 +24,16 @@ export interface ElectronAPI {
   startRecording: () => Promise<void>;
   stopRecording: () => Promise<void>;
   testLlmConnection: (config: LlmRewriteConfig) => Promise<{ ok: boolean; latency_ms: number; error?: string }>;
+  getDictionaryViewData: () => Promise<DictionaryViewData>;
+  saveDictionaryEntry: (entry: Partial<DictionaryEntry>) => Promise<DictionaryViewData>;
+  deleteDictionaryEntry: (id: string) => Promise<DictionaryViewData>;
+  setDictionaryEntryEnabled: (id: string, enabled: boolean) => Promise<DictionaryViewData>;
+  setSystemLexiconEnabled: (enabled: boolean) => Promise<DictionaryViewData>;
+  setSystemLexiconCategoryEnabled: (category: string, enabled: boolean) => Promise<DictionaryViewData>;
+  previewDictionaryImport: (request: DictionaryImportRequest) => Promise<DictionaryImportPreview>;
+  commitDictionaryImport: (preview: DictionaryImportPreview) => Promise<DictionaryViewData>;
+  selectDictionaryImportFile: () => Promise<DictionaryImportPreview | null>;
+  exportDictionary: () => Promise<{ ok: boolean; path?: string }>;
   subscribeSnapshot: (listener: (snapshot: UiSnapshot) => void) => () => void;
   subscribeSettingsViewData: (listener: (view: SettingsViewData) => void) => () => void;
   platform: string;
@@ -32,6 +52,16 @@ const api: ElectronAPI = {
   startRecording: () => ipcRenderer.invoke('start_recording'),
   stopRecording: () => ipcRenderer.invoke('stop_recording'),
   testLlmConnection: (config: LlmRewriteConfig) => ipcRenderer.invoke('test_llm_connection', config),
+  getDictionaryViewData: () => ipcRenderer.invoke('get_dictionary_view_data'),
+  saveDictionaryEntry: (entry: Partial<DictionaryEntry>) => ipcRenderer.invoke('save_dictionary_entry', entry),
+  deleteDictionaryEntry: (id: string) => ipcRenderer.invoke('delete_dictionary_entry', id),
+  setDictionaryEntryEnabled: (id: string, enabled: boolean) => ipcRenderer.invoke('set_dictionary_entry_enabled', { id, enabled }),
+  setSystemLexiconEnabled: (enabled: boolean) => ipcRenderer.invoke('set_system_lexicon_enabled', enabled),
+  setSystemLexiconCategoryEnabled: (category: string, enabled: boolean) => ipcRenderer.invoke('set_system_lexicon_category_enabled', { category, enabled }),
+  previewDictionaryImport: (request: DictionaryImportRequest) => ipcRenderer.invoke('preview_dictionary_import', request),
+  commitDictionaryImport: (preview: DictionaryImportPreview) => ipcRenderer.invoke('commit_dictionary_import', preview),
+  selectDictionaryImportFile: () => ipcRenderer.invoke('select_dictionary_import_file'),
+  exportDictionary: () => ipcRenderer.invoke('export_dictionary'),
   subscribeSnapshot: (listener: (snapshot: UiSnapshot) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, snapshot: UiSnapshot) => {
       listener(snapshot);

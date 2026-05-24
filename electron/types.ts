@@ -1,6 +1,44 @@
 export type RecognitionMode = 'non_streaming' | 'streaming_output';
 export type ComputeBackend = 'auto' | 'cpu' | 'gpu';
-export type TranslationTargetLanguage = 'en' | 'ja' | 'de' | 'yue';
+export type TranslationTargetLanguage =
+  | 'zh'
+  | 'en'
+  | 'fr'
+  | 'pt'
+  | 'es'
+  | 'ja'
+  | 'tr'
+  | 'ru'
+  | 'ar'
+  | 'ko'
+  | 'th'
+  | 'it'
+  | 'de'
+  | 'vi'
+  | 'ms'
+  | 'id'
+  | 'tl'
+  | 'hi'
+  | 'zh-Hant'
+  | 'pl'
+  | 'cs'
+  | 'nl'
+  | 'km'
+  | 'my'
+  | 'fa'
+  | 'gu'
+  | 'ur'
+  | 'te'
+  | 'mr'
+  | 'he'
+  | 'bn'
+  | 'ta'
+  | 'uk'
+  | 'bo'
+  | 'kk'
+  | 'mn'
+  | 'ug'
+  | 'yue';
 export type CaptureIntent = 'dictation' | 'translation';
 export type LlmProvider = 'openai' | 'anthropic' | 'compatible';
 
@@ -14,8 +52,82 @@ export interface LlmRewriteConfig {
   max_tokens: number;
 }
 
+export interface LlmRewriteOptions {
+  preserveTerms?: string[];
+}
+
 export interface LlmRewriteResponse {
   polished_text: string;
+}
+
+export type DictionaryEntryKind = 'term' | 'replacement';
+export type DictionaryEntrySource = 'manual' | 'import' | 'legacy';
+export type DictionaryImportItemStatus = 'add' | 'update' | 'duplicate' | 'invalid' | 'too_long';
+
+export interface DictionaryEntry {
+  id: string;
+  kind: DictionaryEntryKind;
+  term: string;
+  aliases: string[];
+  replacement: string;
+  enabled: boolean;
+  source: DictionaryEntrySource;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SystemLexiconEntry {
+  term: string;
+  category: string;
+  source: string;
+  weight?: number;
+}
+
+export interface DictionaryStats {
+  total: number;
+  enabled: number;
+  terms: number;
+  replacements: number;
+  system_terms: number;
+  system_enabled_terms: number;
+}
+
+export interface DictionaryViewData {
+  entries: DictionaryEntry[];
+  dictionary_path: string;
+  system_lexicon_count: number;
+  system_lexicon_enabled: boolean;
+  system_categories: Array<{ category: string; count: number; enabled: boolean }>;
+  stats: DictionaryStats;
+}
+
+export interface DictionaryImportRequest {
+  content?: string;
+  file_path?: string;
+  file_name?: string;
+}
+
+export interface DictionaryImportPreviewItem {
+  status: DictionaryImportItemStatus;
+  raw: string;
+  entry?: DictionaryEntry;
+  existing_id?: string;
+  reason?: string;
+}
+
+export interface DictionaryImportPreview {
+  source_name: string;
+  items: DictionaryImportPreviewItem[];
+  warnings: string[];
+  summary: {
+    added: number;
+    updated: number;
+    duplicate: number;
+    invalid: number;
+    too_long: number;
+    terms: number;
+    replacements: number;
+  };
 }
 
 export interface Settings {

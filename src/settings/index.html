@@ -44,7 +44,7 @@
             <section class="settings-group">
               <div class="settings-group-heading">
                 <h3>键盘快捷键</h3>
-                <p>保持轻量直接的使用方式，只保留当前真正可用的主热键。</p>
+                <p>Windows 会同时注册备用功能键，避免中文输入法或键盘布局拦截符号快捷键。</p>
               </div>
 
               <label class="settings-row">
@@ -117,14 +117,48 @@
               <label class="settings-row">
                 <div class="settings-row-copy">
                   <span class="settings-row-title">翻译语言</span>
-                  <span class="settings-row-description">翻译流程默认按“中文 -> 目标语言”。当前支持英语、日语、德语，粤语为实验性；仅非流式模式可用。</span>
+                  <span class="settings-row-description">翻译流程默认按“中文 -> 目标语言”。优先使用 HY-MT2-1.8B 本地翻译，异常时自动回退内置 NLLB；仅非流式模式可用。</span>
                 </div>
                 <div class="settings-row-control settings-select-wrap">
                   <select id="translation_target_language" data-setting="translation_target_language">
+                    <option value="zh">中文（简体）</option>
                     <option value="en">英语</option>
+                    <option value="fr">法语</option>
+                    <option value="pt">葡萄牙语</option>
+                    <option value="es">西班牙语</option>
                     <option value="ja">日语</option>
+                    <option value="tr">土耳其语</option>
+                    <option value="ru">俄语</option>
+                    <option value="ar">阿拉伯语</option>
+                    <option value="ko">韩语</option>
+                    <option value="th">泰语</option>
+                    <option value="it">意大利语</option>
                     <option value="de">德语</option>
-                    <option value="yue">粤语（实验性）</option>
+                    <option value="vi">越南语</option>
+                    <option value="ms">马来语</option>
+                    <option value="id">印尼语</option>
+                    <option value="tl">菲律宾语</option>
+                    <option value="hi">印地语</option>
+                    <option value="zh-Hant">繁体中文</option>
+                    <option value="pl">波兰语</option>
+                    <option value="cs">捷克语</option>
+                    <option value="nl">荷兰语</option>
+                    <option value="km">高棉语</option>
+                    <option value="my">缅甸语</option>
+                    <option value="fa">波斯语</option>
+                    <option value="gu">古吉拉特语</option>
+                    <option value="ur">乌尔都语</option>
+                    <option value="te">泰卢固语</option>
+                    <option value="mr">马拉地语</option>
+                    <option value="he">希伯来语</option>
+                    <option value="bn">孟加拉语</option>
+                    <option value="ta">泰米尔语</option>
+                    <option value="uk">乌克兰语</option>
+                    <option value="bo">藏语</option>
+                    <option value="kk">哈萨克语</option>
+                    <option value="mn">蒙古语</option>
+                    <option value="ug">维吾尔语</option>
+                    <option value="yue">粤语</option>
                   </select>
                 </div>
               </label>
@@ -143,15 +177,64 @@
                 </div>
               </label>
 
-              <label class="settings-row settings-row-stack">
+              <div class="settings-row settings-row-stack">
                 <div class="settings-row-copy">
-                  <span class="settings-row-title">自定义词典</span>
-                  <span class="settings-row-description">每行一条，格式为 `原词 => 替换词`。用于品牌名、术语和常见纠错。</span>
+                  <span class="settings-row-title">个人词典</span>
+                  <span class="settings-row-description" id="dictionary-stats">正在加载本地词典…</span>
                 </div>
-                <div class="settings-row-control settings-textarea-wrap">
-                  <textarea id="custom_dictionary" data-setting="custom_dictionary" rows="5" placeholder="typo type => typetype"></textarea>
+
+                <div class="dictionary-panel">
+                  <div class="dictionary-toolbar">
+                    <div class="settings-input-wrap dictionary-search">
+                      <input type="search" id="dictionary-search" placeholder="搜索正确词或可能识别错的词" />
+                    </div>
+                    <button type="button" id="dictionary-add-button" class="settings-secondary-button">新增词条</button>
+                    <button type="button" id="dictionary-import-file-button" class="settings-secondary-button">导入文件</button>
+                    <button type="button" id="dictionary-export-button" class="settings-secondary-button">导出</button>
+                    <button type="button" id="dictionary-help-button" class="settings-secondary-button">导入方法说明</button>
+                  </div>
+
+                  <div class="dictionary-editor" id="dictionary-editor" hidden>
+                    <div class="settings-input-wrap">
+                      <input type="text" id="dictionary-term-input" placeholder="正确词，例如：typetype" />
+                    </div>
+                    <div class="settings-input-wrap">
+                      <input type="text" id="dictionary-alias-input" placeholder="可能识别错的词，可不填；多个用逗号隔开" />
+                    </div>
+                    <div class="dictionary-inline-actions">
+                      <button type="button" id="dictionary-save-entry-button" class="settings-secondary-button">保存词条</button>
+                      <button type="button" id="dictionary-cancel-entry-button" class="settings-secondary-button">取消</button>
+                    </div>
+                  </div>
+
+                  <div class="dictionary-import-panel" id="dictionary-import-panel">
+                    <div class="settings-textarea-wrap">
+                      <textarea id="dictionary-paste-input" rows="4" placeholder="可直接粘贴常用词；两列内容会识别为纠错词。"></textarea>
+                    </div>
+                    <div class="dictionary-inline-actions">
+                      <button type="button" id="dictionary-preview-paste-button" class="settings-secondary-button">预览粘贴导入</button>
+                      <button type="button" id="dictionary-confirm-import-button" class="settings-secondary-button" disabled>确认导入</button>
+                    </div>
+                    <div class="dictionary-preview" id="dictionary-preview"></div>
+                  </div>
+
+                  <div class="system-lexicon-panel">
+                    <div class="system-lexicon-header">
+                      <div class="settings-row-copy">
+                        <span class="settings-row-title">系统基础词库</span>
+                        <span class="settings-row-description" id="system-lexicon-description">系统基础词库为只读词库，仅用于术语保护和润写保留，不会上传，不会强制替换原文。</span>
+                      </div>
+                      <label class="settings-switch" title="启用系统基础词库">
+                        <input type="checkbox" id="system-lexicon-toggle" />
+                        <span class="settings-switch-ui"></span>
+                      </label>
+                    </div>
+                    <div class="system-lexicon-categories" id="system-lexicon-categories"></div>
+                  </div>
+
+                  <div class="dictionary-list" id="dictionary-list"></div>
                 </div>
-              </label>
+              </div>
 
               <label class="settings-row settings-row-toggle">
                 <div class="settings-row-copy">
@@ -410,7 +493,7 @@
               </div>
 
               <div class="settings-copy-block">
-                <p>1. macOS 默认热键是 <strong>Option+/</strong>，Windows 是 <strong>F8</strong>。</p>
+                <p>1. Windows 语音输入可用 <strong>Ctrl+/</strong> 或 <strong>F8</strong>，翻译可用 <strong>Ctrl+.</strong> 或 <strong>F9</strong>。</p>
                 <p>2. 按一下开始录音，再按一下开始转写。</p>
                 <p>3. 识别完成后会先写入剪贴板，再尝试自动回填到之前的输入框。</p>
                 <p>4. 如果快捷键没有反应，优先检查对应系统权限；如果不会自动回填，优先检查辅助功能权限。</p>
@@ -425,6 +508,31 @@
         </footer>
       </section>
     </main>
+
+    <dialog class="dictionary-help-dialog" id="dictionary-help-dialog">
+      <div class="dictionary-help-content">
+        <div class="dictionary-help-header">
+          <h3>导入方法说明</h3>
+          <button type="button" class="settings-secondary-button" id="dictionary-help-close-button">关闭</button>
+        </div>
+        <div class="settings-copy-block">
+          <p>普通用户最简单的方式：一行一个常用词，直接粘贴或保存成 txt 后导入。</p>
+          <p>纠错词可以写成两列：第一列是可能识别错的词，第二列是正确词。Excel、WPS 表格、CSV、Word 表格都按这个规则识别。</p>
+          <p>WPS 的 .wps 和 .et 第一版请先另存为 .docx 或 .xlsx 再导入。</p>
+        </div>
+        <div class="settings-textarea-wrap">
+          <textarea id="dictionary-help-example" rows="7" readonly>typetype
+语音转写
+踢派普, typetype
+太普太普, typetype
+迷你麦克斯, MiniMax
+迪普西克, DeepSeek</textarea>
+        </div>
+        <div class="dictionary-inline-actions">
+          <button type="button" class="settings-secondary-button" id="dictionary-copy-example-button">复制示例</button>
+        </div>
+      </div>
+    </dialog>
 
     <script type="module" src="./settings.js"></script>
   </body>

@@ -67,3 +67,22 @@ test("rewriteWithPreferredLlm supports GPT through OpenAI API key config", async
     model: "gpt-5.5",
   }]);
 });
+
+test("rewriteWithPreferredLlm passes local dictionary terms to the rewrite engine", async () => {
+  let receivedOptions = null;
+  const result = await rewriteWithPreferredLlm("请整理typetype会议纪要", {
+    llm_rewrite: OPENAI_CONFIG,
+  }, {
+    preserveTerms: ["typetype", "会议纪要"],
+    createEngine: (_config, options) => ({
+      rewrite: async () => {
+        receivedOptions = options;
+        return { polished_text: "typetype 会议纪要" };
+      },
+    }),
+    logger: { log() {}, error() {} },
+  });
+
+  assert.equal(result.polishedText, "typetype 会议纪要");
+  assert.deepEqual(receivedOptions, { preserveTerms: ["typetype", "会议纪要"] });
+});

@@ -1,5 +1,15 @@
 import { ipcMain } from 'electron';
-import { Settings, UiSnapshot, SettingsViewData, AsrDiagnostics, LlmRewriteConfig } from './types';
+import {
+  Settings,
+  UiSnapshot,
+  SettingsViewData,
+  AsrDiagnostics,
+  LlmRewriteConfig,
+  DictionaryEntry,
+  DictionaryImportPreview,
+  DictionaryImportRequest,
+  DictionaryViewData,
+} from './types';
 
 export function registerIpcHandlers(
   getSnapshot: () => UiSnapshot,
@@ -14,7 +24,17 @@ export function registerIpcHandlers(
   runAsrDiagnostics: () => Promise<AsrDiagnostics>,
   startRecording: () => void,
   stopRecording: () => void,
-  testLlmConnection: (config: LlmRewriteConfig) => Promise<{ ok: boolean; latency_ms: number; error?: string }>
+  testLlmConnection: (config: LlmRewriteConfig) => Promise<{ ok: boolean; latency_ms: number; error?: string }>,
+  getDictionaryViewData: () => DictionaryViewData,
+  saveDictionaryEntry: (entry: Partial<DictionaryEntry>) => DictionaryViewData,
+  deleteDictionaryEntry: (id: string) => DictionaryViewData,
+  setDictionaryEntryEnabled: (id: string, enabled: boolean) => DictionaryViewData,
+  setSystemLexiconEnabled: (enabled: boolean) => DictionaryViewData,
+  setSystemLexiconCategoryEnabled: (category: string, enabled: boolean) => DictionaryViewData,
+  previewDictionaryImport: (request: DictionaryImportRequest) => Promise<DictionaryImportPreview>,
+  commitDictionaryImport: (preview: DictionaryImportPreview) => DictionaryViewData,
+  selectDictionaryImportFile: () => Promise<DictionaryImportPreview | null>,
+  exportDictionary: () => Promise<{ ok: boolean; path?: string }>
 ): void {
   ipcMain.handle('get_snapshot', () => getSnapshot());
   ipcMain.handle('get_settings_view_data', () => getSettingsViewData());
@@ -29,4 +49,14 @@ export function registerIpcHandlers(
   ipcMain.handle('start_recording', () => startRecording());
   ipcMain.handle('stop_recording', () => stopRecording());
   ipcMain.handle('test_llm_connection', (_event, config) => testLlmConnection(config));
+  ipcMain.handle('get_dictionary_view_data', () => getDictionaryViewData());
+  ipcMain.handle('save_dictionary_entry', (_event, entry) => saveDictionaryEntry(entry));
+  ipcMain.handle('delete_dictionary_entry', (_event, id) => deleteDictionaryEntry(id));
+  ipcMain.handle('set_dictionary_entry_enabled', (_event, { id, enabled }) => setDictionaryEntryEnabled(id, enabled));
+  ipcMain.handle('set_system_lexicon_enabled', (_event, enabled) => setSystemLexiconEnabled(enabled));
+  ipcMain.handle('set_system_lexicon_category_enabled', (_event, { category, enabled }) => setSystemLexiconCategoryEnabled(category, enabled));
+  ipcMain.handle('preview_dictionary_import', (_event, request) => previewDictionaryImport(request));
+  ipcMain.handle('commit_dictionary_import', (_event, preview) => commitDictionaryImport(preview));
+  ipcMain.handle('select_dictionary_import_file', () => selectDictionaryImportFile());
+  ipcMain.handle('export_dictionary', () => exportDictionary());
 }

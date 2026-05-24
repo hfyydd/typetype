@@ -6,6 +6,7 @@ import {
   shell,
   ipcMain,
   session,
+  dialog,
 } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -24,7 +25,17 @@ import { getLogFilePath, getLogDirectory, installFileLogger } from './logger';
 import { canStopRecording, RECORDING_STOP_GUARD_MS } from './recording-toggle';
 import { scheduleTranscriptionStart } from './transcription-timing';
 import { createTranscriptionLogMeta } from './transcription-log';
-import { UiSnapshot, SettingsViewData, Settings, AsrDiagnostics, CaptureIntent } from './types';
+import {
+  UiSnapshot,
+  SettingsViewData,
+  Settings,
+  AsrDiagnostics,
+  CaptureIntent,
+  DictionaryEntry,
+  DictionaryImportPreview,
+  DictionaryImportRequest,
+  DictionaryViewData,
+} from './types';
 import { getAvailableMicrophones } from './microphones';
 import { initializeAsrEngine } from './asr-bootstrap';
 import { cleanupTranscript } from './transcript-cleanup';
@@ -34,6 +45,9 @@ import { testLlmConnection } from './llm-rewrite';
 import { rewriteWithPreferredLlm } from './llm-route';
 import { StreamingSegmenter } from './streaming-segmentation';
 import { ensureStreamingFinalPunctuation, prefixStreamingBoundaryPunctuation } from './streaming-punctuation';
+import { applyBasicTranscriptPunctuation } from './transcript-punctuation';
+import { DictionaryStore } from './dictionary-store';
+import { createDictionaryImportPreview } from './dictionary-import';
 
 const FEEDBACK_EMAIL = 'feedback@typetype.app';
 const WINDOWS_LOGIN_ITEM_NAME = 'typetype';
@@ -82,6 +96,7 @@ class TypenewApp {
   private streamingPendingBoundaryPunctuation = false;
   private activeCaptureIntent: CaptureIntent = 'dictation';
   private translationEngine: TranslationEngine;
+  private dictionaryStore: DictionaryStore;
 
   constructor() {
     this.settingsStore = new SettingsStore();
@@ -89,6 +104,11 @@ class TypenewApp {
     this.autoPaste = new AutoPaste();
     this.trayManager = new TrayManager(this.getResourcesPath());
     this.shortcutManager = new ShortcutManager();
+    this.dictionaryStore = new DictionaryStore({
+      dataDir: this.getDataDir(),
+      resourcesPath: this.getResourcesPath(),
+      legacyCustomDictionary: this.settingsStore.getSettings().custom_dictionary,
+    });
     this.translationEngine = new TranslationEngine({
       dataDir: this.getDataDir(),
       processResourcesPath: process.resourcesPath,
@@ -116,6 +136,85 @@ class TypenewApp {
 
   private getDataDir(): string {
     return this.settingsStore.getDataDir();
+  }
+
+  private getDictionaryViewData(): DictionaryViewData {
+    return this.dictionaryStore.getViewData();
+  }
+
+  private saveDictionaryEntry(entry: Partial<DictionaryEntry>): DictionaryViewData {
+    this.dictionaryStore.saveEntry(entry);
+    return this.dictionaryStore.getViewData();
+  }
+
+  private deleteDictionaryEntry(id: string): DictionaryViewData {
+    this.dictionaryStore.deleteEntry(id);
+    return this.dictionaryStore.getViewData();
+  }
+
+  private setDictionaryEntryEnabled(id: string, enabled: boolean): DictionaryViewData {
+    this.dictionaryStore.setEntryEnabled(id, enabled);
+    return this.dictionaryStore.getViewData();
+  }
+
+  private setSystemLexiconEnabled(enabled: boolean): DictionaryViewData {
+    return this.dictionaryStore.setSystemLexiconEnabled(enabled);
+  }
+
+  private setSystemLexiconCategoryEnabled(category: string, enabled: boolean): DictionaryViewData {
+    return this.dictionaryStore.setSystemCategoryEnabled(category, enabled);
+  }
+
+  private previewDictionaryImport(request: DictionaryImportRequest): Promise<DictionaryImportPreview> {
+    return createDictionaryImportPreview(request, this.dictionaryStore.getEntries());
+  }
+
+  private commitDictionaryImport(preview: DictionaryImportPreview): DictionaryViewData {
+    return this.dictionaryStore.commitImportPreview(preview);
+  }
+
+  private async selectDictionaryImportFile(): Promise<DictionaryImportPreview | null> {
+    const options: Electron.OpenDialogOptions = {
+      title: '选择要导入的词典文件',
+      properties: ['openFile'],
+      filters: [
+        { name: '词典文件', extensions: ['txt', 'csv', 'xlsx', 'xls', 'docx', 'wps', 'et'] },
+        { name: '全部文件', extensions: ['*'] },
+      ],
+    };
+    const result = this.settingsWindow
+      ? await dialog.showOpenDialog(this.settingsWindow, options)
+      : await dialog.showOpenDialog(options);
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return null;
+    }
+
+    const filePath = result.filePaths[0];
+    return this.previewDictionaryImport({
+      file_path: filePath,
+      file_name: path.basename(filePath),
+    });
+  }
+
+  private async exportDictionary(): Promise<{ ok: boolean; path?: string }> {
+    const options: Electron.SaveDialogOptions = {
+      title: '导出个人词典',
+      defaultPath: path.join(app.getPath('desktop'), 'typetype-dictionary.json'),
+      filters: [
+        { name: 'JSON 文件', extensions: ['json'] },
+      ],
+    };
+    const result = this.settingsWindow
+      ? await dialog.showSaveDialog(this.settingsWindow, options)
+      : await dialog.showSaveDialog(options);
+
+    if (result.canceled || !result.filePath) {
+      return { ok: false };
+    }
+
+    this.dictionaryStore.exportTo(result.filePath);
+    return { ok: true, path: result.filePath };
   }
 
   private setupApp(): void {
@@ -179,7 +278,17 @@ class TypenewApp {
       () => this.runAsrDiagnostics(),
       () => this.startRecording(),
       () => this.stopRecording(),
-      (config) => testLlmConnection(config)
+      (config) => testLlmConnection(config),
+      () => this.getDictionaryViewData(),
+      (entry) => this.saveDictionaryEntry(entry),
+      (id) => this.deleteDictionaryEntry(id),
+      (id, enabled) => this.setDictionaryEntryEnabled(id, enabled),
+      (enabled) => this.setSystemLexiconEnabled(enabled),
+      (category, enabled) => this.setSystemLexiconCategoryEnabled(category, enabled),
+      (request) => this.previewDictionaryImport(request),
+      (preview) => this.commitDictionaryImport(preview),
+      () => this.selectDictionaryImportFile(),
+      () => this.exportDictionary()
     );
   }
 
@@ -465,12 +574,22 @@ class TypenewApp {
 
     this.shortcutManager.unregisterAll();
 
-    const dictationSuccess = this.shortcutManager.register('dictation', settings.hotkey, () => {
-      this.handleShortcutToggle('dictation');
-    });
-    const translationSuccess = this.shortcutManager.register('translation', settings.translate_hotkey, () => {
-      this.handleShortcutToggle('translation');
-    });
+    const dictationSuccess = this.shortcutManager.register(
+      'dictation',
+      settings.hotkey,
+      () => {
+        this.handleShortcutToggle('dictation');
+      },
+      { disabledFallbackHotkeys: [settings.translate_hotkey] }
+    );
+    const translationSuccess = this.shortcutManager.register(
+      'translation',
+      settings.translate_hotkey,
+      () => {
+        this.handleShortcutToggle('translation');
+      },
+      { disabledFallbackHotkeys: [settings.hotkey] }
+    );
 
     console.log('Global shortcut registration', {
       dictation: {
@@ -485,8 +604,12 @@ class TypenewApp {
       },
     });
 
-    if (!dictationSuccess || !translationSuccess) {
-      throw new Error('全局快捷键注册失败，请更换快捷键组合后再试。');
+    if (!dictationSuccess) {
+      throw new Error('语音输入快捷键注册失败，请更换快捷键组合后再试。');
+    }
+
+    if (!translationSuccess) {
+      console.warn('Translation shortcut registration failed; dictation shortcut remains active');
     }
   }
 
@@ -950,7 +1073,7 @@ class TypenewApp {
       }
 
       const settings = this.settingsStore.getSettings();
-      const cleanedTranscript = cleanupTranscript(text, settings);
+      const cleanedTranscript = this.cleanupTranscriptWithDictionary(text, settings);
       if (!cleanedTranscript) {
         this.hideOverlayWindow();
         this.stateMachine.dismissOverlay();
@@ -968,7 +1091,8 @@ class TypenewApp {
       if (this.activeCaptureIntent === 'translation') {
         finalText = await this.translateTranscript(cleanedTranscript);
       } else {
-        finalText = await this.rewriteWithLlm(cleanedTranscript) || cleanedTranscript;
+        finalText = await this.rewriteWithLlm(cleanedTranscript)
+          || applyBasicTranscriptPunctuation(cleanedTranscript);
         finalText = this.stateMachine.finishOutput(finalText);
       }
       console.log('[translation-debug] final-output', {
@@ -1081,7 +1205,11 @@ class TypenewApp {
       transcript,
     });
 
-    const translated = await this.translationEngine.translate(transcript, settings.translation_target_language);
+    const translated = await this.translationEngine.translate(
+      transcript,
+      settings.translation_target_language,
+      this.dictionaryStore.getMatchedTerms(transcript, 30)
+    );
     if (!translated) {
       throw new Error(`本地翻译没有返回 ${language.label} 文本。`);
     }
@@ -1092,6 +1220,15 @@ class TypenewApp {
     });
 
     return this.stateMachine.finishOutput(translated);
+  }
+
+  private cleanupTranscriptWithDictionary(
+    text: string,
+    settings: Settings,
+    options: { partial?: boolean } = {}
+  ): string {
+    const cleaned = cleanupTranscript(text, settings);
+    return this.dictionaryStore.applyToText(cleaned, options).trim();
   }
 
   private cancelStreamingOutputSession(reason: string): void {
@@ -1117,7 +1254,9 @@ class TypenewApp {
     this.updateTrayAnimation();
     this.publishSnapshot();
 
-    const result = await rewriteWithPreferredLlm(text, settings);
+    const result = await rewriteWithPreferredLlm(text, settings, {
+      preserveTerms: this.dictionaryStore.getMatchedTerms(text),
+    });
 
     // 降级使用原始转写文本
     return result.polishedText;
@@ -1160,7 +1299,7 @@ class TypenewApp {
           return;
         }
 
-        const cleaned = cleanupTranscript(text, settings);
+        const cleaned = this.cleanupTranscriptWithDictionary(text, settings, { partial: true });
         if (!cleaned) {
           return;
         }
@@ -1208,7 +1347,7 @@ class TypenewApp {
 
     const finalRawText = this.asrEngine?.finishStreamingSession() ?? '';
     const finalText = ensureStreamingFinalPunctuation(
-      cleanupTranscript(finalRawText || this.streamingLatestText, this.settingsStore.getSettings())
+      this.cleanupTranscriptWithDictionary(finalRawText || this.streamingLatestText, this.settingsStore.getSettings())
     );
     this.streamingLatestText = '';
 
