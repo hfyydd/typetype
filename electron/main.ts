@@ -1205,7 +1205,11 @@ class TypenewApp {
       transcript,
     });
 
-    const translated = await this.translationEngine.translate(transcript, settings.translation_target_language);
+    const translated = await this.translationEngine.translate(
+      transcript,
+      settings.translation_target_language,
+      this.dictionaryStore.getMatchedTerms(transcript, 30)
+    );
     if (!translated) {
       throw new Error(`本地翻译没有返回 ${language.label} 文本。`);
     }

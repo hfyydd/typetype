@@ -14,6 +14,7 @@ test("electron-builder does not package models twice", () => {
     "**/*",
     "!models/**",
     "!translation-models/**",
+    "!runtimes/**",
   ]);
 });
 
@@ -25,6 +26,7 @@ test("electron-builder excludes bundled model sample assets from packaged output
     "**/*",
     "!models/**",
     "!translation-models/**",
+    "!runtimes/**",
   ]);
   assert.deepEqual(modelEntry?.filter, [
     "**/*",
@@ -36,8 +38,14 @@ test("electron-builder excludes bundled model sample assets from packaged output
 
 test("electron-builder packages bundled translation runtimes as extra resources", () => {
   const runtimeEntry = pkg.build.extraResources.find((entry) => entry?.from === "resources/translation-runtime");
+  const llamaRuntimeEntry = pkg.build.extraResources.find((entry) => entry?.from === "resources/runtimes");
 
   assert.equal(runtimeEntry, undefined);
+  assert.deepEqual(llamaRuntimeEntry, {
+    from: "resources/runtimes",
+    to: "runtimes",
+    filter: ["**/*"],
+  });
 });
 
 test("package metadata uses the typetype app name", () => {

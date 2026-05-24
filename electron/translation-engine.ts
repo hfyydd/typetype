@@ -1,10 +1,15 @@
-import { fork, ChildProcess, spawnSync } from 'child_process';
+import { fork, ChildProcess, spawn, spawnSync } from 'child_process';
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 
 import {
   getTranslationCacheDir,
   getTranslationLanguageDefinition,
+  resolveBundledHyMt2ModelPath,
+  resolveBundledLlamaCliPath,
   resolveBundledTranslationModelPath,
+  TranslationLanguageDefinition,
 } from './translation-model-registry';
 import { TranslationTargetLanguage } from './types';
 
@@ -41,13 +46,37 @@ export class TranslationEngine {
     this.appPath = options.appPath;
   }
 
-  async translate(text: string, targetLanguage: TranslationTargetLanguage): Promise<string> {
+  async translate(
+    text: string,
+    targetLanguage: TranslationTargetLanguage,
+    preserveTerms: string[] = []
+  ): Promise<string> {
     const normalized = text.trim();
     if (!normalized) {
       return '';
     }
 
     const definition = getTranslationLanguageDefinition(targetLanguage);
+    try {
+      const hyMt2Result = await this.translateWithHyMt2(normalized, definition, preserveTerms);
+      if (hyMt2Result) {
+        return hyMt2Result;
+      }
+    } catch (error) {
+      console.warn('[translation-debug] hy-mt2-fallback-to-nllb', {
+        targetLanguage,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    return this.translateWithNllb(normalized, targetLanguage, definition);
+  }
+
+  private async translateWithNllb(
+    text: string,
+    targetLanguage: TranslationTargetLanguage,
+    definition: TranslationLanguageDefinition
+  ): Promise<string> {
     const worker = this.ensureWorker();
     const requestId = this.nextRequestId++;
     const bundledModelPath = resolveBundledTranslationModelPath(
@@ -63,7 +92,7 @@ export class TranslationEngine {
       modelPathOrId,
       bundledModelPath,
       targetLanguage,
-      text: normalized,
+      text,
     });
 
     return new Promise<string>((resolve, reject) => {
@@ -75,9 +104,68 @@ export class TranslationEngine {
         cacheDir: getTranslationCacheDir(this.dataDir),
         sourceLanguage: definition.sourceLanguage,
         targetLanguage: definition.targetLanguage,
-        text: normalized,
+        text,
       });
     });
+  }
+
+  private async translateWithHyMt2(
+    text: string,
+    definition: TranslationLanguageDefinition,
+    preserveTerms: string[]
+  ): Promise<string> {
+    const modelPath = resolveBundledHyMt2ModelPath(this.processResourcesPath, this.appPath);
+    const llamaCliPath = resolveBundledLlamaCliPath(this.processResourcesPath, this.appPath);
+
+    if (!modelPath || !llamaCliPath) {
+      throw new Error('HY-MT2-1.8B 模型或 llama.cpp 运行时未打包');
+    }
+
+    const prompt = buildHyMt2Prompt(text, definition.hyTargetLanguage, preserveTerms);
+    const promptFilePath = writeHyMt2PromptFile(prompt, this.dataDir);
+    const args = [
+      '-m',
+      modelPath,
+      '-f',
+      promptFilePath,
+      '-n',
+      '1024',
+      '--ctx-size',
+      '4096',
+      '--threads',
+      String(Math.max(2, Math.min(os.cpus().length || 4, 8))),
+      '--temp',
+      '0.2',
+      '--top-p',
+      '0.6',
+      '--top-k',
+      '20',
+      '-st',
+      '--no-display-prompt',
+      '--no-warmup',
+      '--simple-io',
+      '--log-disable',
+      '--no-show-timings',
+    ];
+
+    console.log('[translation-debug] hy-mt2-request', {
+      modelPath,
+      llamaCliPath,
+      targetLanguage: definition.hyTargetLanguage,
+      text,
+    });
+
+    try {
+      const output = await runLlamaCli(llamaCliPath, args);
+      const translated = cleanupHyMt2Output(output);
+      console.log('[translation-debug] hy-mt2-result', {
+        targetLanguage: definition.hyTargetLanguage,
+        text: translated,
+      });
+      return translated;
+    } finally {
+      fs.rmSync(promptFilePath, { force: true });
+    }
   }
 
   dispose(): void {
@@ -203,4 +291,109 @@ export class TranslationEngine {
   private isPackagedAsarRuntime(): boolean {
     return this.appPath.endsWith('app.asar') || __dirname.includes('.asar');
   }
+}
+
+function buildHyMt2Prompt(text: string, targetLanguage: string, preserveTerms: string[]): string {
+  const uniqueTerms = Array.from(new Set(preserveTerms.map((term) => term.trim()).filter(Boolean))).slice(0, 30);
+  const terminology = uniqueTerms.length
+    ? uniqueTerms.map((term) => `- ${term}`).join('\n')
+    : '无';
+
+  return [
+    `You are a translation engine. Translate ONLY the text inside <source> into ${targetLanguage}.`,
+    'Use <terms> only as terminology hints. Do not translate or output instructions, tags, or terms list.',
+    'Output translation only.',
+    '<terms>',
+    terminology,
+    '</terms>',
+    '<source>',
+    text,
+    '</source>',
+  ].join('\n');
+}
+
+function writeHyMt2PromptFile(prompt: string, dataDir: string): string {
+  const promptDir = path.join(dataDir, 'translation-prompts');
+  fs.mkdirSync(promptDir, { recursive: true });
+  const promptFilePath = path.join(promptDir, `hy-mt2-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.txt`);
+  fs.writeFileSync(promptFilePath, prompt, 'utf8');
+  return promptFilePath;
+}
+
+function cleanupHyMt2Output(output: string): string {
+  const lines = output
+    .replace(/<｜[^｜]+｜>/g, '')
+    .replace(/<\|[^|]+\|>/g, '')
+    .replace(/\r/g, '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const promptIndex = lines.findIndex((line) => line.startsWith('> '));
+  const sourceEndIndex = lines.findIndex((line, index) => index > promptIndex && line === '</source>');
+  const startIndex = sourceEndIndex >= 0
+    ? sourceEndIndex + 1
+    : (promptIndex >= 0 ? promptIndex + 1 : 0);
+  const candidateLines = lines.slice(startIndex);
+  const cleanedLines = candidateLines
+    .filter((line) => !isLlamaCliNoiseLine(line))
+    .filter((line) => !/^[▄▀█\s]+$/.test(line));
+
+  return cleanedLines
+    .join('\n')
+    .trim();
+}
+
+function isLlamaCliNoiseLine(line: string): boolean {
+  return (
+    line === 'Loading model...' ||
+    line === 'available commands:' ||
+    line === 'Exiting...' ||
+    line.startsWith('/exit') ||
+    line.startsWith('/regen') ||
+    line.startsWith('/clear') ||
+    line.startsWith('/read') ||
+    line.startsWith('/glob') ||
+    line.startsWith('build') ||
+    line.startsWith('model') ||
+    line.startsWith('modalities') ||
+    line.startsWith('llama_') ||
+    line.startsWith('main:') ||
+    line.startsWith('[ Prompt:')
+  );
+}
+
+function runLlamaCli(executablePath: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(executablePath, args, {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    const timeout = setTimeout(() => {
+      child.kill();
+      reject(new Error('HY-MT2 翻译超时'));
+    }, 120000);
+
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on('error', (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      if (code !== 0) {
+        reject(new Error(stderr.trim() || `llama.cpp exited with code ${code}`));
+        return;
+      }
+
+      resolve(stdout);
+    });
+  });
 }

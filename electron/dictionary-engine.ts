@@ -147,15 +147,45 @@ export function findMatchedDictionaryTerms(
     return [];
   }
 
-  const candidates = [
-    ...userEntries
-      .filter((entry) => entry.enabled)
-      .flatMap((entry) => [entry.term, entry.replacement, ...entry.aliases]),
-    ...systemEntries.map((entry) => entry.term),
-  ];
+  const textCharacters = new Set(Array.from(text));
+  const matched: string[] = [];
+  const seen = new Set<string>();
+  const collect = (term: string) => {
+    const normalized = normalizeDictionaryText(term);
+    if (!normalized) {
+      return;
+    }
+    const key = normalized.toLocaleLowerCase();
+    if (seen.has(key) || !text.includes(normalized)) {
+      return;
+    }
+    seen.add(key);
+    matched.push(normalized);
+  };
 
-  return uniqueStrings(candidates)
-    .filter((term) => term && text.includes(term))
+  for (const entry of userEntries) {
+    if (!entry.enabled) {
+      continue;
+    }
+    collect(entry.term);
+    collect(entry.replacement);
+    for (const alias of entry.aliases) {
+      collect(alias);
+    }
+  }
+
+  for (const entry of systemEntries) {
+    const firstCharacter = Array.from(entry.term || '')[0];
+    if (!firstCharacter || !textCharacters.has(firstCharacter)) {
+      continue;
+    }
+    collect(entry.term);
+    if (matched.length >= limit * 4) {
+      break;
+    }
+  }
+
+  return matched
     .sort((a, b) => b.length - a.length)
     .slice(0, limit);
 }

@@ -1,6 +1,44 @@
 export type RecognitionMode = 'non_streaming' | 'streaming_output';
 export type ComputeBackend = 'auto' | 'cpu' | 'gpu';
-export type TranslationTargetLanguage = 'en' | 'ja' | 'de' | 'yue';
+export type TranslationTargetLanguage =
+  | 'zh'
+  | 'en'
+  | 'fr'
+  | 'pt'
+  | 'es'
+  | 'ja'
+  | 'tr'
+  | 'ru'
+  | 'ar'
+  | 'ko'
+  | 'th'
+  | 'it'
+  | 'de'
+  | 'vi'
+  | 'ms'
+  | 'id'
+  | 'tl'
+  | 'hi'
+  | 'zh-Hant'
+  | 'pl'
+  | 'cs'
+  | 'nl'
+  | 'km'
+  | 'my'
+  | 'fa'
+  | 'gu'
+  | 'ur'
+  | 'te'
+  | 'mr'
+  | 'he'
+  | 'bn'
+  | 'ta'
+  | 'uk'
+  | 'bo'
+  | 'kk'
+  | 'mn'
+  | 'ug'
+  | 'yue';
 export type CaptureIntent = 'dictation' | 'translation';
 export type LlmProvider = 'openai' | 'anthropic' | 'compatible';
 
