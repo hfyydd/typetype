@@ -46,6 +46,7 @@ import { rewriteWithPreferredLlm } from './llm-route';
 import { StreamingSegmenter } from './streaming-segmentation';
 import { ensureStreamingFinalPunctuation, prefixStreamingBoundaryPunctuation } from './streaming-punctuation';
 import { applyBasicTranscriptPunctuation } from './transcript-punctuation';
+import { applyVoiceFormattingCommands } from './transcript-formatting';
 import { DictionaryStore } from './dictionary-store';
 import { createDictionaryImportPreview } from './dictionary-import';
 
@@ -154,6 +155,11 @@ class TypenewApp {
 
   private setDictionaryEntryEnabled(id: string, enabled: boolean): DictionaryViewData {
     this.dictionaryStore.setEntryEnabled(id, enabled);
+    return this.dictionaryStore.getViewData();
+  }
+
+  private promoteAutoLearnedEntry(id: string): DictionaryViewData {
+    this.dictionaryStore.promoteAutoLearnedEntry(id);
     return this.dictionaryStore.getViewData();
   }
 
@@ -283,6 +289,7 @@ class TypenewApp {
       (entry) => this.saveDictionaryEntry(entry),
       (id) => this.deleteDictionaryEntry(id),
       (id, enabled) => this.setDictionaryEntryEnabled(id, enabled),
+      (id) => this.promoteAutoLearnedEntry(id),
       (enabled) => this.setSystemLexiconEnabled(enabled),
       (category, enabled) => this.setSystemLexiconCategoryEnabled(category, enabled),
       (request) => this.previewDictionaryImport(request),
@@ -1092,9 +1099,10 @@ class TypenewApp {
         finalText = await this.translateTranscript(cleanedTranscript);
       } else {
         finalText = await this.rewriteWithLlm(cleanedTranscript)
-          || applyBasicTranscriptPunctuation(cleanedTranscript);
+          || this.applyFallbackPunctuation(cleanedTranscript, settings);
         finalText = this.stateMachine.finishOutput(finalText);
       }
+      this.autoLearnFromTranscript(`${cleanedTranscript}\n${finalText}`, settings);
       console.log('[translation-debug] final-output', {
         intent: this.activeCaptureIntent,
         text: finalText,
@@ -1228,7 +1236,37 @@ class TypenewApp {
     options: { partial?: boolean } = {}
   ): string {
     const cleaned = cleanupTranscript(text, settings);
-    return this.dictionaryStore.applyToText(cleaned, options).trim();
+    const dictionaryApplied = this.dictionaryStore.applyToText(cleaned, options);
+    return applyVoiceFormattingCommands(dictionaryApplied, {
+      partial: options.partial,
+      enabled: settings.voice_formatting_enabled,
+    }).trim();
+  }
+
+  private applyFallbackPunctuation(text: string, settings: Settings): string {
+    if (settings.voice_formatting_enabled && text.includes('\n')) {
+      return text
+        .split('\n')
+        .map((line) => line.trim() ? applyBasicTranscriptPunctuation(line) : '')
+        .join('\n')
+        .replace(/\n{4,}/g, '\n\n\n')
+        .trim();
+    }
+
+    return applyBasicTranscriptPunctuation(text);
+  }
+
+  private autoLearnFromTranscript(text: string, settings: Settings): void {
+    const result = this.dictionaryStore.autoLearnFromText(text, settings.auto_learning_enabled);
+    if (result.learned === 0) {
+      return;
+    }
+
+    console.log('[dictionary] auto learned local terms', {
+      count: result.learned,
+      terms: result.terms,
+    });
+    this.publishSettingsViewData();
   }
 
   private cancelStreamingOutputSession(reason: string): void {
@@ -1256,6 +1294,8 @@ class TypenewApp {
 
     const result = await rewriteWithPreferredLlm(text, settings, {
       preserveTerms: this.dictionaryStore.getMatchedTerms(text),
+      scenario: settings.rewrite_scenario,
+      voiceFormattingEnabled: settings.voice_formatting_enabled,
     });
 
     // 降级使用原始转写文本
@@ -1346,9 +1386,11 @@ class TypenewApp {
     }
 
     const finalRawText = this.asrEngine?.finishStreamingSession() ?? '';
-    const finalText = ensureStreamingFinalPunctuation(
-      this.cleanupTranscriptWithDictionary(finalRawText || this.streamingLatestText, this.settingsStore.getSettings())
-    );
+    const settings = this.settingsStore.getSettings();
+    const cleanedFinalText = this.cleanupTranscriptWithDictionary(finalRawText || this.streamingLatestText, settings);
+    const finalText = settings.voice_formatting_enabled && cleanedFinalText.includes('\n')
+      ? this.applyFallbackPunctuation(cleanedFinalText, settings)
+      : ensureStreamingFinalPunctuation(cleanedFinalText);
     this.streamingLatestText = '';
 
     if (!finalText) {
@@ -1362,8 +1404,8 @@ class TypenewApp {
       return;
     }
 
-    const settings = this.settingsStore.getSettings();
     const normalized = this.stateMachine.finishOutput(finalText);
+    this.autoLearnFromTranscript(normalized, settings);
     console.log('Streaming transcription complete', createTranscriptionLogMeta(normalized));
 
     if (settings.auto_paste) {

@@ -41,6 +41,14 @@ export type TranslationTargetLanguage =
   | 'yue';
 export type CaptureIntent = 'dictation' | 'translation';
 export type LlmProvider = 'openai' | 'anthropic' | 'compatible';
+export type RewriteScenario =
+  | 'general'
+  | 'meeting_notes'
+  | 'work_report'
+  | 'message_reply'
+  | 'todo_list'
+  | 'study_notes'
+  | 'customer_service';
 
 export interface LlmRewriteConfig {
   enabled: boolean;
@@ -54,6 +62,8 @@ export interface LlmRewriteConfig {
 
 export interface LlmRewriteOptions {
   preserveTerms?: string[];
+  scenario?: RewriteScenario;
+  voiceFormattingEnabled?: boolean;
 }
 
 export interface LlmRewriteResponse {
@@ -61,7 +71,7 @@ export interface LlmRewriteResponse {
 }
 
 export type DictionaryEntryKind = 'term' | 'replacement';
-export type DictionaryEntrySource = 'manual' | 'import' | 'legacy';
+export type DictionaryEntrySource = 'manual' | 'import' | 'legacy' | 'auto_learned';
 export type DictionaryImportItemStatus = 'add' | 'update' | 'duplicate' | 'invalid' | 'too_long';
 
 export interface DictionaryEntry {
@@ -72,6 +82,8 @@ export interface DictionaryEntry {
   replacement: string;
   enabled: boolean;
   source: DictionaryEntrySource;
+  learned_count: number;
+  last_learned_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -88,6 +100,8 @@ export interface DictionaryStats {
   enabled: number;
   terms: number;
   replacements: number;
+  auto_learned: number;
+  last_auto_learned_at: string | null;
   system_terms: number;
   system_enabled_terms: number;
 }
@@ -139,6 +153,9 @@ export interface Settings {
   recognition_mode: RecognitionMode;
   compute_backend: ComputeBackend;
   translation_target_language: TranslationTargetLanguage;
+  auto_learning_enabled: boolean;
+  voice_formatting_enabled: boolean;
+  rewrite_scenario: RewriteScenario;
   custom_dictionary: Array<{ from: string; to: string }>;
   model_path: string | null;
   pinned_model_version: string;

@@ -64,6 +64,8 @@ export function createDictionaryEntry(candidate: DictionaryCandidate): Dictionar
     replacement,
     enabled: true,
     source: candidate.source ?? 'manual',
+    learned_count: 0,
+    last_learned_at: null,
     created_at: now,
     updated_at: now,
   };
@@ -83,6 +85,8 @@ export function sanitizeDictionaryEntry(entry: Partial<DictionaryEntry>): Dictio
     replacement: normalizeDictionaryText(entry.replacement || term),
     enabled: entry.enabled ?? true,
     source: entry.source ?? 'manual',
+    learned_count: entry.learned_count ?? 0,
+    last_learned_at: entry.last_learned_at ?? null,
     created_at: entry.created_at || now,
     updated_at: now,
   };

@@ -16,6 +16,8 @@ export interface LlmRewriteRouteDeps {
   createEngine?: (config: LlmRewriteConfig, options?: LlmRewriteOptions) => RewriteEngineLike;
   logger?: Pick<Console, 'log' | 'error'>;
   preserveTerms?: string[];
+  scenario?: Settings['rewrite_scenario'];
+  voiceFormattingEnabled?: boolean;
 }
 
 export async function rewriteWithPreferredLlm(
@@ -35,7 +37,16 @@ export async function rewriteWithPreferredLlm(
 
   if (hasApiConfig) {
     try {
-      const result = await createEngine(apiConfig, { preserveTerms: deps.preserveTerms ?? [] }).rewrite(text);
+      const rewriteOptions: LlmRewriteOptions = {
+        preserveTerms: deps.preserveTerms ?? [],
+      };
+      if (deps.scenario) {
+        rewriteOptions.scenario = deps.scenario;
+      }
+      if (typeof deps.voiceFormattingEnabled === 'boolean') {
+        rewriteOptions.voiceFormattingEnabled = deps.voiceFormattingEnabled;
+      }
+      const result = await createEngine(apiConfig, rewriteOptions).rewrite(text);
       logger.log('[llm-rewrite] success via API key config', {
         provider: apiConfig.provider,
         model: apiConfig.model,

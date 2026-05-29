@@ -7,6 +7,7 @@ import {
   DictionaryViewData,
   SystemLexiconEntry,
 } from './types';
+import { extractAutoLearnedTerms } from './auto-learning';
 import {
   applyDictionaryReplacements,
   entryKey,
@@ -123,6 +124,66 @@ export class DictionaryStore {
     entry.enabled = enabled;
     entry.updated_at = new Date().toISOString();
     this.saveUserEntries();
+  }
+
+  promoteAutoLearnedEntry(id: string): void {
+    const entry = this.entries.find((item) => item.id === id);
+    if (!entry) {
+      throw new Error('没有找到该词条');
+    }
+    entry.source = 'manual';
+    entry.updated_at = new Date().toISOString();
+    this.saveUserEntries();
+  }
+
+  autoLearnFromText(text: string, enabled: boolean): { learned: number; terms: string[] } {
+    if (!enabled) {
+      return { learned: 0, terms: [] };
+    }
+
+    const now = new Date().toISOString();
+    const learnedTerms: string[] = [];
+    const existingByTerm = new Map(
+      this.entries.map((entry) => [entry.term.toLocaleLowerCase(), entry])
+    );
+
+    const protectedEntries = this.entries.filter((entry) => entry.source !== 'auto_learned');
+    for (const candidate of extractAutoLearnedTerms(text, protectedEntries)) {
+      const key = candidate.term.toLocaleLowerCase();
+      const existing = existingByTerm.get(key);
+      if (existing) {
+        if (existing.source === 'auto_learned') {
+          existing.learned_count = (existing.learned_count ?? 0) + 1;
+          existing.last_learned_at = now;
+          existing.updated_at = now;
+          learnedTerms.push(existing.term);
+        }
+        continue;
+      }
+
+      const entry = sanitizeDictionaryEntry({
+        kind: 'term',
+        term: candidate.term,
+        replacement: candidate.term,
+        aliases: [],
+        enabled: true,
+        source: 'auto_learned',
+        learned_count: 1,
+        last_learned_at: now,
+      });
+      if (!validateDictionaryEntry(entry).ok) {
+        continue;
+      }
+      this.entries.push(entry);
+      existingByTerm.set(key, entry);
+      learnedTerms.push(entry.term);
+    }
+
+    if (learnedTerms.length > 0) {
+      this.saveUserEntries();
+    }
+
+    return { learned: learnedTerms.length, terms: learnedTerms };
   }
 
   commitImportPreview(preview: DictionaryImportPreview): DictionaryViewData {
@@ -273,6 +334,12 @@ export class DictionaryStore {
       enabled: this.entries.filter((entry) => entry.enabled).length,
       terms: this.entries.filter((entry) => entry.kind === 'term').length,
       replacements: this.entries.filter((entry) => entry.kind === 'replacement').length,
+      auto_learned: this.entries.filter((entry) => entry.source === 'auto_learned').length,
+      last_auto_learned_at: this.entries
+        .filter((entry) => entry.source === 'auto_learned' && entry.last_learned_at)
+        .map((entry) => entry.last_learned_at!)
+        .sort()
+        .at(-1) ?? null,
       system_terms: this.systemLexicon.length,
       system_enabled_terms: this.getEnabledSystemLexicon().length,
     };

@@ -10,8 +10,11 @@ const translateHotkeySelect = document.querySelector("#translate_hotkey");
 const autoPasteToggle = document.querySelector("#auto_paste");
 const launchAtLoginToggle = document.querySelector("#launch_at_login");
 const recognitionModeSelect = document.querySelector("#recognition_mode");
+const voiceFormattingToggle = document.querySelector("#voice_formatting_enabled");
+const autoLearningToggle = document.querySelector("#auto_learning_enabled");
 const computeBackendSelect = document.querySelector("#compute_backend");
 const translationTargetLanguageSelect = document.querySelector("#translation_target_language");
+const rewriteScenarioSelect = document.querySelector("#rewrite_scenario");
 const modelPathTextarea = document.querySelector("#model_path");
 const dictionaryStats = document.querySelector("#dictionary-stats");
 const dictionarySearchInput = document.querySelector("#dictionary-search");
@@ -19,7 +22,11 @@ const dictionaryList = document.querySelector("#dictionary-list");
 const dictionaryEditor = document.querySelector("#dictionary-editor");
 const dictionaryTermInput = document.querySelector("#dictionary-term-input");
 const dictionaryAliasInput = document.querySelector("#dictionary-alias-input");
-const dictionaryAddButton = document.querySelector("#dictionary-add-button");
+const dictionaryAddTermButton = document.querySelector("#dictionary-add-term-button");
+const dictionaryAddReplacementButton = document.querySelector("#dictionary-add-replacement-button");
+const dictionaryShowImportButton = document.querySelector("#dictionary-show-import-button");
+const dictionaryEditorTitle = document.querySelector("#dictionary-editor-title");
+const dictionaryEditorHelp = document.querySelector("#dictionary-editor-help");
 const dictionarySaveEntryButton = document.querySelector("#dictionary-save-entry-button");
 const dictionaryCancelEntryButton = document.querySelector("#dictionary-cancel-entry-button");
 const dictionaryPasteInput = document.querySelector("#dictionary-paste-input");
@@ -73,6 +80,7 @@ let saveTimer = null;
 let unsubscribeSettingsViewData = null;
 let dictionaryView = null;
 let activeDictionaryEntryId = null;
+let dictionaryEditorMode = "term";
 let pendingDictionaryImportPreview = null;
 
 const TEXT_INPUT_SAVE_DELAY_MS = 450;
@@ -143,8 +151,11 @@ function fillSettingsView(view) {
   autoPasteToggle.checked = view.settings.auto_paste;
   launchAtLoginToggle.checked = view.settings.launch_at_login ?? false;
   recognitionModeSelect.value = view.settings.recognition_mode ?? "non_streaming";
+  voiceFormattingToggle.checked = view.settings.voice_formatting_enabled ?? true;
+  autoLearningToggle.checked = view.settings.auto_learning_enabled ?? true;
   computeBackendSelect.value = view.settings.compute_backend ?? "auto";
   translationTargetLanguageSelect.value = view.settings.translation_target_language ?? "en";
+  rewriteScenarioSelect.value = view.settings.rewrite_scenario ?? "general";
   modelPathTextarea.value = view.settings.model_path ?? "";
   populateMicrophoneSelect(view.microphones, view.settings.microphone_id);
 
@@ -218,8 +229,11 @@ function collectSettings() {
     auto_paste: autoPasteToggle.checked,
     launch_at_login: launchAtLoginToggle.checked,
     recognition_mode: recognitionModeSelect.value,
+    voice_formatting_enabled: voiceFormattingToggle.checked,
+    auto_learning_enabled: autoLearningToggle.checked,
     compute_backend: computeBackendSelect.value,
     translation_target_language: translationTargetLanguageSelect.value,
+    rewrite_scenario: rewriteScenarioSelect.value,
     model_path: modelPathTextarea.value || null,
     pinned_model_version: currentSettings?.pinned_model_version ?? "sherpa-onnx-sense-voice",
     custom_dictionary: currentSettings?.custom_dictionary ?? [],
@@ -282,7 +296,7 @@ function getProviderSelectValue(rewrite = {}) {
   if (route.key === "anthropic") {
     return "anthropic";
   }
-  return "custom";
+  return "compatible";
 }
 
 function getApiModelLabel(settings) {
@@ -340,7 +354,10 @@ function renderDictionaryView() {
   }
 
   const stats = dictionaryView.stats;
-  dictionaryStats.textContent = `个人词典 ${stats.total} 条，已启用 ${stats.enabled} 条；纠错词 ${stats.replacements} 条，常用词 ${stats.terms} 条；系统基础词库启用 ${stats.system_enabled_terms}/${stats.system_terms} 条。`;
+  const learnedLabel = stats.last_auto_learned_at
+    ? `，最近自动学习 ${new Date(stats.last_auto_learned_at).toLocaleString()}`
+    : "";
+  dictionaryStats.textContent = `个人词典 ${stats.total} 条，已启用 ${stats.enabled} 条；自动学习 ${stats.auto_learned} 条${learnedLabel}；纠错词 ${stats.replacements} 条，常用词 ${stats.terms} 条；系统基础词库启用 ${stats.system_enabled_terms}/${stats.system_terms} 条。`;
   renderSystemLexiconControls();
 
   const query = dictionarySearchInput.value.trim().toLocaleLowerCase();
@@ -355,26 +372,37 @@ function renderDictionaryView() {
   });
 
   if (visibleEntries.length === 0) {
-    dictionaryList.innerHTML = `<div class="dictionary-empty">还没有匹配的词条。</div>`;
+    dictionaryList.innerHTML = `<div class="dictionary-empty">还没有匹配的词条。可以先点上方“添加常用词”，例如客户姓名、产品名、项目名。</div>`;
     return;
   }
 
+  const sourceRank = { auto_learned: 0, manual: 1, import: 2, legacy: 3 };
   dictionaryList.innerHTML = visibleEntries
+    .sort((a, b) => (sourceRank[a.source] ?? 9) - (sourceRank[b.source] ?? 9) || a.term.localeCompare(b.term, "zh-CN"))
     .map((entry) => {
       const aliasText = (entry.aliases ?? []).join("、") || "常用词保护";
       const kindLabel = entry.kind === "replacement" ? "纠错词" : "常用词";
+      const sourceLabel = entry.source === "auto_learned" ? "自动学习"
+        : entry.source === "import" ? "批量导入"
+          : entry.source === "legacy" ? "旧版迁移"
+            : "手动添加";
+      const learnedText = entry.source === "auto_learned"
+        ? ` · 命中 ${entry.learned_count ?? 1} 次`
+        : "";
       return `
         <article class="dictionary-item" data-id="${escapeHtml(entry.id)}">
           <div class="dictionary-item-main">
             <div class="dictionary-item-title">
               <strong>${escapeHtml(entry.term)}</strong>
               <span class="dictionary-kind">${kindLabel}</span>
+              <span class="dictionary-kind" data-source="${entry.source}">${sourceLabel}</span>
               <span class="dictionary-kind" data-enabled="${entry.enabled ? "true" : "false"}">${entry.enabled ? "已启用" : "已停用"}</span>
             </div>
-            <div class="dictionary-item-meta">${escapeHtml(aliasText)}</div>
+            <div class="dictionary-item-meta">${escapeHtml(aliasText)}${learnedText}</div>
           </div>
           <div class="dictionary-item-actions">
             <button type="button" class="settings-secondary-button" data-action="toggle">${entry.enabled ? "停用" : "启用"}</button>
+            ${entry.source === "auto_learned" ? `<button type="button" class="settings-secondary-button" data-action="promote">转为手动词</button>` : ""}
             <button type="button" class="settings-secondary-button" data-action="edit">编辑</button>
             <button type="button" class="settings-secondary-button" data-action="delete">删除</button>
           </div>
@@ -405,16 +433,28 @@ function renderSystemLexiconControls() {
     .join("");
 }
 
-function openDictionaryEditor(entry = null) {
+function openDictionaryEditor(entry = null, mode = "term") {
   activeDictionaryEntryId = entry?.id ?? null;
+  dictionaryEditorMode = entry?.kind ?? mode;
   dictionaryTermInput.value = entry?.term ?? "";
   dictionaryAliasInput.value = (entry?.aliases ?? []).join("，");
+  const isReplacement = dictionaryEditorMode === "replacement";
+  dictionaryEditorTitle.textContent = activeDictionaryEntryId
+    ? "编辑词条"
+    : (isReplacement ? "添加纠错词" : "添加常用词");
+  dictionaryEditorHelp.textContent = isReplacement
+    ? "把经常听错的说法填到下面，例如“迷你麦克斯”，正确词填 MiniMax。"
+    : "保存人名、品牌、项目名、专业词，润写和翻译时会尽量保留。";
+  dictionaryAliasInput.placeholder = isReplacement
+    ? "可能识别错的词，例如：迷你麦克斯；多个用逗号隔开"
+    : "可不填。也可以填别名，例如简称、旧称";
   dictionaryEditor.hidden = false;
   dictionaryTermInput.focus();
 }
 
 function closeDictionaryEditor() {
   activeDictionaryEntryId = null;
+  dictionaryEditorMode = "term";
   dictionaryTermInput.value = "";
   dictionaryAliasInput.value = "";
   dictionaryEditor.hidden = true;
@@ -430,7 +470,7 @@ function collectDictionaryEntryFromEditor() {
   return {
     ...(existing ?? {}),
     id: activeDictionaryEntryId ?? undefined,
-    kind: aliases.length > 0 ? "replacement" : "term",
+    kind: dictionaryEditorMode === "replacement" || aliases.length > 0 ? "replacement" : "term",
     term,
     replacement: term,
     aliases,
@@ -509,6 +549,12 @@ async function handleDictionaryListAction(event) {
       dictionaryView = await electronAPI.setDictionaryEntryEnabled(entry.id, !entry.enabled);
       renderDictionaryView();
       setStatus(entry.enabled ? "词条已停用。" : "词条已启用。");
+      return;
+    }
+    if (action === "promote") {
+      dictionaryView = await electronAPI.promoteAutoLearnedDictionaryEntry(entry.id);
+      renderDictionaryView();
+      setStatus("已转为手动词，后续不会被自动学习策略覆盖。");
       return;
     }
     if (action === "delete") {
@@ -659,8 +705,11 @@ for (const element of [
   autoPasteToggle,
   launchAtLoginToggle,
   recognitionModeSelect,
+  voiceFormattingToggle,
+  autoLearningToggle,
   computeBackendSelect,
   translationTargetLanguageSelect,
+  rewriteScenarioSelect,
   llmEnabledToggle,
   llmProviderSelect,
 ]) {
@@ -736,7 +785,11 @@ dictionarySearchInput.addEventListener("input", renderDictionaryView);
 dictionaryList.addEventListener("click", (event) => {
   void handleDictionaryListAction(event);
 });
-dictionaryAddButton.addEventListener("click", () => openDictionaryEditor());
+dictionaryAddTermButton.addEventListener("click", () => openDictionaryEditor(null, "term"));
+dictionaryAddReplacementButton.addEventListener("click", () => openDictionaryEditor(null, "replacement"));
+dictionaryShowImportButton.addEventListener("click", () => {
+  dictionaryPasteInput.focus();
+});
 dictionaryCancelEntryButton.addEventListener("click", closeDictionaryEditor);
 dictionarySaveEntryButton.addEventListener("click", () => {
   void saveDictionaryEntryFromEditor();
