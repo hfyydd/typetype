@@ -349,13 +349,23 @@
               <div id="llm-config-panel" class="llm-config-panel" hidden>
                 <label class="settings-row">
                   <div class="settings-row-copy">
-                    <span class="settings-row-title">提供商</span>
+                    <span class="settings-row-title">大模型厂家</span>
+                    <span class="settings-row-description">选择厂家和国内/国际地域后会自动填好 Base URL 和模型名，客户只需要填写对应平台的 API Key。</span>
                   </div>
                   <div class="settings-row-control settings-select-wrap">
                     <select id="llm_provider" data-setting="llm_provider">
-                      <option value="openai">OpenAI (GPT)</option>
-                      <option value="anthropic">Anthropic (Claude)</option>
-                      <option value="compatible">国产/第三方模型（Base URL 自定义）</option>
+                      <option value="openai">OpenAI GPT</option>
+                      <option value="minimax_cn">MiniMax 国内版</option>
+                      <option value="minimax_intl">MiniMax 国际版</option>
+                      <option value="deepseek">DeepSeek</option>
+                      <option value="qwen_cn">通义千问 / 阿里云百炼（北京）</option>
+                      <option value="qwen_sg">通义千问 / 阿里云百炼（新加坡）</option>
+                      <option value="qwen_us">通义千问 / 阿里云百炼（美国）</option>
+                      <option value="zhipu">智谱 GLM</option>
+                      <option value="kimi_cn">Kimi / 月之暗面国内版</option>
+                      <option value="kimi_intl">Kimi 国际版</option>
+                      <option value="baichuan">百川智能</option>
+                      <option value="doubao">豆包 / 火山方舟</option>
                     </select>
                   </div>
                 </label>
@@ -363,65 +373,38 @@
                 <label class="settings-row settings-row-stack">
                   <div class="settings-row-copy">
                     <span class="settings-row-title">Base URL</span>
-                    <span class="settings-row-description">GPT 选择 OpenAI；国产模型统一选择“国产/第三方模型”，再从下方提示复制对应 Base URL。</span>
+                    <span class="settings-row-description" id="llm-base-url-description">根据模型平台自动填写；高级用户也可以手动修改。</span>
                   </div>
                   <div class="settings-row-control settings-input-wrap">
-                    <input type="text" id="llm_base_url" data-setting="llm_base_url" list="llm-base-url-presets" placeholder="例如 https://api.minimaxi.com/v1" />
-                    <datalist id="llm-base-url-presets">
-                      <option value="https://api.openai.com/v1">OpenAI GPT</option>
-                      <option value="https://api.minimaxi.com/v1">MiniMax 中国区</option>
-                      <option value="https://api.minimax.io/v1">MiniMax 国际区</option>
-                      <option value="https://api.deepseek.com">DeepSeek</option>
-                      <option value="https://dashscope.aliyuncs.com/compatible-mode/v1">通义千问/阿里云百炼</option>
-                      <option value="https://open.bigmodel.cn/api/paas/v4">智谱 GLM</option>
-                      <option value="https://api.moonshot.ai/v1">月之暗面 Kimi</option>
-                      <option value="https://api.baichuan-ai.com/v1">百川智能</option>
-                      <option value="https://ark.cn-beijing.volces.com/api/v3">豆包/火山方舟</option>
-                    </datalist>
+                    <input type="text" id="llm_base_url" data-setting="llm_base_url" />
                   </div>
                 </label>
 
                 <label class="settings-row settings-row-stack">
                   <div class="settings-row-copy">
                     <span class="settings-row-title">API Key</span>
-                    <span class="settings-row-description">密钥本地存储，不上传。OpenAI API Key 获取地址：https://platform.openai.com/api-keys</span>
+                    <span class="settings-row-description" id="llm-api-key-description">请填写所选平台生成的 API Key；密钥本地存储，不上传。</span>
                   </div>
                   <div class="settings-row-control settings-input-wrap">
-                    <input type="password" id="llm_api_key" data-setting="llm_api_key" placeholder="sk-..." />
+                    <input type="password" id="llm_api_key" data-setting="llm_api_key" placeholder="只填当前平台的 API Key" />
                   </div>
                 </label>
 
                 <label class="settings-row settings-row-stack">
                   <div class="settings-row-copy">
                     <span class="settings-row-title">模型</span>
-                    <span class="settings-row-description">填厂商模型名；不确定时先用下方推荐模型，测试连接成功后再保存。</span>
+                    <span class="settings-row-description" id="llm-model-description">根据模型平台自动填写默认推荐模型；高级用户也可以手动修改。</span>
                   </div>
                   <div class="settings-row-control settings-input-wrap">
-                    <input type="text" id="llm_model" data-setting="llm_model" list="llm-model-presets" placeholder="例如 MiniMax-M2.7" />
-                    <datalist id="llm-model-presets">
-                      <option value="MiniMax-M2.7">MiniMax</option>
-                      <option value="deepseek-v4-flash">DeepSeek</option>
-                      <option value="qwen-plus">通义千问</option>
-                      <option value="glm-5.1">智谱 GLM</option>
-                      <option value="kimi-k2.6">月之暗面 Kimi</option>
-                      <option value="Baichuan4">百川智能</option>
-                      <option value="doubao-seed-1-6-250615">豆包/火山方舟</option>
-                      <option value="gpt-5.5">OpenAI 最强默认</option>
-                    </datalist>
+                    <input type="text" id="llm_model" data-setting="llm_model" />
                   </div>
                 </label>
 
                 <div class="settings-provider-guide">
-                  <div><strong>GPT 和国产模型都在这里填写 API Key。</strong></div>
-                  <div>OpenAI GPT：提供商选 <code>OpenAI (GPT)</code>，Base URL <code>https://api.openai.com/v1</code>，模型 <code>gpt-5.5</code>，API Key 获取地址 <code>https://platform.openai.com/api-keys</code></div>
-                  <div>国产模型都选 <code>国产/第三方模型（Base URL 自定义）</code>。</div>
-                  <div>MiniMax：Base URL <code>https://api.minimaxi.com/v1</code>，模型 <code>MiniMax-M2.7</code></div>
-                  <div>DeepSeek：Base URL <code>https://api.deepseek.com</code>，模型 <code>deepseek-v4-flash</code></div>
-                  <div>通义千问：Base URL <code>https://dashscope.aliyuncs.com/compatible-mode/v1</code>，模型 <code>qwen-plus</code></div>
-                  <div>智谱：Base URL <code>https://open.bigmodel.cn/api/paas/v4</code>，模型 <code>glm-5.1</code></div>
-                  <div>Kimi：Base URL <code>https://api.moonshot.ai/v1</code>，模型 <code>kimi-k2.6</code></div>
-                  <div>百川：Base URL <code>https://api.baichuan-ai.com/v1</code>，模型 <code>Baichuan4</code></div>
-                  <div>豆包：Base URL <code>https://ark.cn-beijing.volces.com/api/v3</code>，模型 <code>doubao-seed-1-6-250615</code></div>
+                  <div><strong>傻瓜式填写：</strong>先选模型平台，软件会自动填 Base URL 和模型名；客户只粘贴该平台自己的 API Key。</div>
+                  <div>国内版和国际版不能混用：例如 Kimi 国内平台 Key 要选择 <code>Kimi / 月之暗面国内版</code>，国际平台 Key 才选择 <code>Kimi 国际版</code>。</div>
+                  <div>MiniMax 和通义千问也区分地域地址，请按客户创建 API Key 的平台/地域选择。</div>
+                  <div>如果测试连接返回 401，通常是 API Key 填错、复制不完整、Key 所属平台不匹配，或账户额度/权限不可用。</div>
                 </div>
 
                 <div class="settings-row">

@@ -8,9 +8,8 @@
   "scripts": {
     "dev": "npm run build:electron && electron .",
     "build:electron": "node -e \"require('fs').rmSync('dist-electron',{recursive:true,force:true})\" && tsc -p tsconfig.json",
-    "build": "npm run build:electron && electron-builder --mac --windows",
-    "build:mac": "npm run build:electron && electron-builder --mac",
-    "build:win": "npm run build:electron && electron-builder --win"
+    "build": "npm run build:electron && electron-builder --mac",
+    "build:mac": "npm run build:electron && electron-builder --mac"
   },
   "dependencies": {
     "@huggingface/transformers": "^4.2.0",
@@ -18,7 +17,6 @@
     "bzip2": "^0.1.1",
     "mammoth": "^1.12.0",
     "sherpa-onnx-node": "^1.12.39",
-    "sherpa-onnx-win-x64": "^1.12.39",
     "tar-stream": "^3.2.0",
     "xlsx": "^0.18.5"
   },
@@ -37,8 +35,7 @@
       "output": "release"
     },
     "asarUnpack": [
-      "node_modules/sherpa-onnx-node/**/*",
-      "node_modules/sherpa-onnx-win-x64/**/*"
+      "node_modules/sherpa-onnx-node/**/*"
     ],
     "files": [
       "src/**/*",
@@ -88,27 +85,6 @@
         "zip"
       ],
       "icon": "resources/icon.icns"
-    },
-    "win": {
-      "target": [
-        "nsis"
-      ],
-      "signAndEditExecutable": false,
-      "electronLanguages": [
-        "zh-CN",
-        "en-US"
-      ],
-      "icon": "resources/icon.ico",
-      "extraFiles": [
-        {
-          "from": "node_modules/electron/dist/ffmpeg.dll",
-          "to": "."
-        }
-      ]
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
     }
   }
 }
