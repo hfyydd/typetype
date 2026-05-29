@@ -30,13 +30,12 @@ function main() {
   assertExists(iconPath, "application icon");
 
   writeInstallHelpers();
+  removeIfExists(archivePath);
   removeIfExists(sfxConfigPath);
   removeIfExists(patchedSfxPath);
   removeIfExists(installerPath);
 
-  if (!fs.existsSync(archivePath)) {
-    run(sevenZipPath, ["a", "-t7z", "-mx=1", archivePath, "*"], appDir);
-  }
+  run(sevenZipPath, ["a", "-t7z", "-mx=1", archivePath, "*"], appDir);
 
   fs.writeFileSync(
     sfxConfigPath,

@@ -36,7 +36,7 @@ test("LlmRewriteEngine keeps rewrite behavior and removes MiniMax think blocks",
     };
   };
 
-  const engine = new LlmRewriteEngine(BASE_CONFIG);
+  const engine = new LlmRewriteEngine(BASE_CONFIG, { scenario: "meeting_notes", voiceFormattingEnabled: true });
   const result = await engine.rewrite("嗯今天我们测试语音输入");
 
   assert.equal(result.polished_text, "今天我们测试语音输入。");
@@ -46,5 +46,8 @@ test("LlmRewriteEngine keeps rewrite behavior and removes MiniMax think blocks",
   assert.match(requestBody.messages[0].content, /STRUCTURE/i);
   assert.match(requestBody.messages[0].content, /COMPLETENESS/i);
   assert.match(requestBody.messages[0].content, /action items/i);
+  assert.match(requestBody.messages[0].content, /Scenario mode/i);
+  assert.match(requestBody.messages[0].content, /meeting notes/i);
+  assert.match(requestBody.messages[0].content, /line breaks/i);
   assert.match(requestBody.messages[0].content, /一、/);
 });

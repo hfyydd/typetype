@@ -158,9 +158,31 @@
                     <option value="kk">哈萨克语</option>
                     <option value="mn">蒙古语</option>
                     <option value="ug">维吾尔语</option>
-                    <option value="yue">粤语</option>
+                    <option value="yue">粤语（实验性）</option>
                   </select>
                 </div>
+              </label>
+
+              <label class="settings-row settings-row-toggle">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">语音格式指令</span>
+                  <span class="settings-row-description">说“空格、换行、隔一行、标题、第一点”时自动转换成空格、换行和编号，不依赖联网。</span>
+                </div>
+                <span class="settings-switch">
+                  <input type="checkbox" id="voice_formatting_enabled" data-setting="voice_formatting_enabled" />
+                  <span class="settings-switch-ui"></span>
+                </span>
+              </label>
+
+              <label class="settings-row settings-row-toggle">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">自动静默学习词汇</span>
+                  <span class="settings-row-description">自动把高置信专有名词加入本机词典，例如人名、品牌、项目名；会过滤手机号、邮箱、密钥等隐私内容。</span>
+                </div>
+                <span class="settings-switch">
+                  <input type="checkbox" id="auto_learning_enabled" data-setting="auto_learning_enabled" />
+                  <span class="settings-switch-ui"></span>
+                </span>
               </label>
 
               <label class="settings-row">
@@ -184,17 +206,46 @@
                 </div>
 
                 <div class="dictionary-panel">
+                  <div class="dictionary-guide">
+                    <div>
+                      <strong>词典是做什么的？</strong>
+                      <span>常用词用于保护专有名词，纠错词用于把“听错的词”自动改成正确写法，自动学习会在本机悄悄积累客户常说的专业词。</span>
+                    </div>
+                    <div>
+                      <strong>小白怎么用？</strong>
+                      <span>先用“添加常用词”保存人名、品牌、项目名；识别总听错时再用“添加纠错词”。批量名单直接粘贴或导入表格。</span>
+                    </div>
+                  </div>
+
+                  <div class="dictionary-mode-grid">
+                    <button type="button" id="dictionary-add-term-button" class="dictionary-mode-button">
+                      <strong>添加常用词</strong>
+                      <span>如 MiniMax、DeepSeek、客户姓名</span>
+                    </button>
+                    <button type="button" id="dictionary-add-replacement-button" class="dictionary-mode-button">
+                      <strong>添加纠错词</strong>
+                      <span>如 迷你麦克斯 -> MiniMax</span>
+                    </button>
+                    <button type="button" id="dictionary-show-import-button" class="dictionary-mode-button">
+                      <strong>批量导入</strong>
+                      <span>粘贴名单，或导入 txt/csv/Excel/Word</span>
+                    </button>
+                  </div>
+
                   <div class="dictionary-toolbar">
                     <div class="settings-input-wrap dictionary-search">
                       <input type="search" id="dictionary-search" placeholder="搜索正确词或可能识别错的词" />
                     </div>
-                    <button type="button" id="dictionary-add-button" class="settings-secondary-button">新增词条</button>
                     <button type="button" id="dictionary-import-file-button" class="settings-secondary-button">导入文件</button>
                     <button type="button" id="dictionary-export-button" class="settings-secondary-button">导出</button>
                     <button type="button" id="dictionary-help-button" class="settings-secondary-button">导入方法说明</button>
                   </div>
 
                   <div class="dictionary-editor" id="dictionary-editor" hidden>
+                    <div class="dictionary-editor-heading">
+                      <strong id="dictionary-editor-title">添加常用词</strong>
+                      <span id="dictionary-editor-help">常用词会被保护，润写和翻译时尽量不改错。</span>
+                    </div>
                     <div class="settings-input-wrap">
                       <input type="text" id="dictionary-term-input" placeholder="正确词，例如：typetype" />
                     </div>
@@ -265,6 +316,24 @@
                 <h3>LLM 润写</h3>
                 <p>调用 LLM API 优化语音转写结果，自动补全标点、梳理逻辑并整理层级结构。</p>
               </div>
+
+              <label class="settings-row">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">结构化场景</span>
+                  <span class="settings-row-description">选择常见使用场景，润写会更像会议纪要、工作汇报、待办清单等成稿。</span>
+                </div>
+                <div class="settings-row-control settings-select-wrap">
+                  <select id="rewrite_scenario" data-setting="rewrite_scenario">
+                    <option value="general">通用整理</option>
+                    <option value="meeting_notes">会议纪要</option>
+                    <option value="work_report">工作汇报</option>
+                    <option value="message_reply">邮件/微信回复</option>
+                    <option value="todo_list">待办清单</option>
+                    <option value="study_notes">学习笔记</option>
+                    <option value="customer_service">客服记录</option>
+                  </select>
+                </div>
+              </label>
 
               <label class="settings-row settings-row-toggle">
                 <div class="settings-row-copy">

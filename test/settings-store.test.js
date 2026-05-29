@@ -31,6 +31,9 @@ test("SettingsStore stores data under the typetype app directory", () => {
     assert.equal(store.getSettings().translation_target_language, "en");
     assert.equal(store.getSettings().recognition_mode, "non_streaming");
     assert.equal(store.getSettings().compute_backend, "auto");
+    assert.equal(store.getSettings().auto_learning_enabled, true);
+    assert.equal(store.getSettings().voice_formatting_enabled, true);
+    assert.equal(store.getSettings().rewrite_scenario, "general");
   } finally {
     os.homedir = originalHomedir;
     fs.rmSync(tempHome, { recursive: true, force: true });
@@ -55,8 +58,16 @@ test("settings UI exposes current LLM rewrite controls without legacy polish fie
   assert.equal(html.includes('id="translate_hotkey"'), true);
   assert.equal(html.includes('id="translation_target_language"'), true);
   assert.equal(html.includes("粤语（实验性）"), true);
+  assert.equal(html.includes('id="auto_learning_enabled"'), true);
+  assert.equal(html.includes('id="voice_formatting_enabled"'), true);
+  assert.equal(html.includes('id="rewrite_scenario"'), true);
+  assert.equal(html.includes("添加常用词"), true);
+  assert.equal(html.includes("添加纠错词"), true);
   assert.equal(script.includes("translateHotkeySelect"), true);
   assert.equal(script.includes("translationTargetLanguageSelect"), true);
+  assert.equal(script.includes("autoLearningToggle"), true);
+  assert.equal(script.includes("voiceFormattingToggle"), true);
+  assert.equal(script.includes("rewriteScenarioSelect"), true);
   assert.equal(html.includes('id="asr-diagnostics-button"'), true);
   assert.equal(html.includes('id="asr-diagnostics-output"'), true);
   assert.equal(html.includes('id="copy-asr-diagnostics-button"'), true);
@@ -100,6 +111,9 @@ test("SettingsStore migrates legacy typenew settings into the typetype directory
     assert.equal(settings.translation_target_language, "en");
     assert.equal(settings.recognition_mode, "non_streaming");
     assert.equal(settings.compute_backend, "auto");
+    assert.equal(settings.auto_learning_enabled, true);
+    assert.equal(settings.voice_formatting_enabled, true);
+    assert.equal(settings.rewrite_scenario, "general");
     assert.equal(fs.existsSync(path.join(currentDir, "settings.toml")), true);
   } finally {
     os.homedir = originalHomedir;

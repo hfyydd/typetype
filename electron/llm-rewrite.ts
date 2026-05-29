@@ -1,4 +1,4 @@
-import { LlmRewriteConfig, LlmRewriteOptions, LlmRewriteResponse } from './types';
+import { LlmRewriteConfig, LlmRewriteOptions, LlmRewriteResponse, RewriteScenario } from './types';
 
 const DEFAULT_SYSTEM_PROMPT = `You are a professional voice-to-text structuring assistant. Transform raw speech transcription into clear, polished, complete, and structured text.
 
@@ -16,6 +16,16 @@ Core rules:
 11. Output ONLY the processed text. No explanations, no quotes.
 
 The user text will be enclosed in <transcription> tags.`;
+
+const SCENARIO_PROMPTS: Record<RewriteScenario, string> = {
+  general: 'Use the most natural structure for the content. For short messages, keep it concise.',
+  meeting_notes: 'Format as meeting notes when possible: topic, key points, decisions, action items, owners, deadlines, and risks.',
+  work_report: 'Format as a work report when possible: background, progress, problems, next steps, and support needed.',
+  message_reply: 'Format as a clear message reply suitable for chat or email. Keep tone natural and avoid excessive headings.',
+  todo_list: 'Extract tasks as a checklist with clear actions, owners, priorities, and dates when mentioned.',
+  study_notes: 'Format as study notes with concepts, explanations, examples, and summary points.',
+  customer_service: 'Format as a customer-service record with customer issue, facts, handling result, follow-up, and cautions.',
+};
 
 export class LlmRewriteEngine {
   private config: LlmRewriteConfig;
@@ -124,15 +134,27 @@ export class LlmRewriteEngine {
       .slice(0, 50);
 
     if (terms.length === 0) {
-      return DEFAULT_SYSTEM_PROMPT;
+      return `${DEFAULT_SYSTEM_PROMPT}${this.buildScenarioPrompt()}`;
     }
 
-    return `${DEFAULT_SYSTEM_PROMPT}
+    return `${DEFAULT_SYSTEM_PROMPT}${this.buildScenarioPrompt()}
 
 Local dictionary terms detected in the current transcription:
 ${terms.map((term) => `- ${term}`).join('\n')}
 
 When these terms appear in the transcription, preserve them exactly unless the surrounding text clearly indicates a correction already happened. Do not translate, paraphrase, or normalize these protected terms.`;
+  }
+
+  private buildScenarioPrompt(): string {
+    const scenario = this.options.scenario ?? 'general';
+    const voiceFormatting = this.options.voiceFormattingEnabled === false
+      ? ''
+      : '\nVoice formatting commands such as spaces, line breaks, blank lines, titles, and numbered points may already have been converted locally. Preserve intentional line breaks and hierarchy unless they are clearly wrong.';
+
+    return `
+
+Scenario mode:
+${SCENARIO_PROMPTS[scenario] ?? SCENARIO_PROMPTS.general}${voiceFormatting}`;
   }
 
   private buildUserMessage(rawText: string): string {
