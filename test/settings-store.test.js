@@ -57,6 +57,7 @@ test("settings UI exposes current LLM rewrite controls without legacy polish fie
   assert.equal(html.includes("通义千问 / 阿里云百炼（美国）"), true);
   assert.equal(script.includes('base_url: "https://api.moonshot.cn/v1"'), true);
   assert.equal(script.includes('base_url: "https://api.moonshot.ai/v1"'), true);
+  assert.equal(script.includes("temperature: 1"), true);
   assert.equal(script.includes('base_url: "https://dashscope-us.aliyuncs.com/compatible-mode/v1"'), true);
   assert.equal(script.includes("collectLlmRewriteConfig"), true);
   assert.equal(script.includes("applyLlmPresetToControls(llmProviderSelect.value)"), true);
