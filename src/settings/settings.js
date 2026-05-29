@@ -49,8 +49,11 @@ const llmEnabledToggle = document.querySelector("#llm_enabled");
 const llmConfigPanel = document.querySelector("#llm-config-panel");
 const llmProviderSelect = document.querySelector("#llm_provider");
 const llmBaseUrlInput = document.querySelector("#llm_base_url");
+const llmBaseUrlDescription = document.querySelector("#llm-base-url-description");
 const llmApiKeyInput = document.querySelector("#llm_api_key");
+const llmApiKeyDescription = document.querySelector("#llm-api-key-description");
 const llmModelInput = document.querySelector("#llm_model");
+const llmModelDescription = document.querySelector("#llm-model-description");
 const llmTestButton = document.querySelector("#llm-test-button");
 const llmTestStatus = document.querySelector("#llm-test-status");
 const llmActiveRouteLabel = document.querySelector("#llm-active-route-label");
@@ -84,6 +87,105 @@ let dictionaryEditorMode = "term";
 let pendingDictionaryImportPreview = null;
 
 const TEXT_INPUT_SAVE_DELAY_MS = 450;
+
+const LLM_PROVIDER_PRESETS = {
+  openai: {
+    label: "OpenAI GPT",
+    provider: "openai",
+    base_url: "https://api.openai.com/v1",
+    model: "gpt-5.5",
+    apiKeyHelp: "请填写 OpenAI Platform API Key；ChatGPT Plus/Pro 订阅不等于 API 免费额度。获取地址：https://platform.openai.com/api-keys",
+    placeholder: "粘贴 OpenAI Platform API Key",
+  },
+  minimax_cn: {
+    label: "MiniMax 国内版",
+    provider: "compatible",
+    base_url: "https://api.minimaxi.com/v1",
+    model: "MiniMax-M2.7",
+    apiKeyHelp: "请填写 MiniMax 国内平台生成的 API Key；国内 Key 不要选择 MiniMax 国际版。",
+    placeholder: "粘贴 MiniMax 国内 API Key",
+  },
+  minimax_intl: {
+    label: "MiniMax 国际版",
+    provider: "compatible",
+    base_url: "https://api.minimax.io/v1",
+    model: "MiniMax-M2.7",
+    apiKeyHelp: "请填写 MiniMax 国际平台生成的 API Key；国际 Key 不要选择 MiniMax 国内版。",
+    placeholder: "粘贴 MiniMax 国际 API Key",
+  },
+  deepseek: {
+    label: "DeepSeek",
+    provider: "compatible",
+    base_url: "https://api.deepseek.com",
+    model: "deepseek-v4-flash",
+    apiKeyHelp: "请填写 DeepSeek 平台生成的 API Key，不要填写 OpenAI 或其他平台的 Key。",
+    placeholder: "粘贴 DeepSeek API Key",
+  },
+  qwen_cn: {
+    label: "通义千问 / 阿里云百炼（北京）",
+    provider: "compatible",
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    model: "qwen-plus",
+    apiKeyHelp: "请填写阿里云百炼北京地域的 API Key；地域和 API Key 所属控制台要一致。",
+    placeholder: "粘贴通义千问北京地域 API Key",
+  },
+  qwen_sg: {
+    label: "通义千问 / 阿里云百炼（新加坡）",
+    provider: "compatible",
+    base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    model: "qwen-plus",
+    apiKeyHelp: "请填写阿里云百炼新加坡地域的 API Key；地域和 API Key 所属控制台要一致。",
+    placeholder: "粘贴通义千问新加坡 API Key",
+  },
+  qwen_us: {
+    label: "通义千问 / 阿里云百炼（美国）",
+    provider: "compatible",
+    base_url: "https://dashscope-us.aliyuncs.com/compatible-mode/v1",
+    model: "qwen-plus",
+    apiKeyHelp: "请填写阿里云百炼美国弗吉尼亚地域的 API Key；地域和 API Key 所属控制台要一致。",
+    placeholder: "粘贴通义千问美国 API Key",
+  },
+  zhipu: {
+    label: "智谱 GLM",
+    provider: "compatible",
+    base_url: "https://open.bigmodel.cn/api/paas/v4",
+    model: "glm-5.1",
+    apiKeyHelp: "请填写智谱开放平台 API Key，不要填写 OpenAI 或其他平台的 Key。",
+    placeholder: "粘贴智谱 API Key",
+  },
+  kimi_cn: {
+    label: "Kimi / 月之暗面国内版",
+    provider: "compatible",
+    base_url: "https://api.moonshot.cn/v1",
+    model: "kimi-k2.5",
+    apiKeyHelp: "请填写 Kimi 国内开放平台 API Key；国内 Key 应使用 api.moonshot.cn。401 通常表示 Key 填错、平台不匹配、复制不完整或权限/额度不可用。",
+    placeholder: "粘贴 Kimi 国内 API Key",
+  },
+  kimi_intl: {
+    label: "Kimi 国际版",
+    provider: "compatible",
+    base_url: "https://api.moonshot.ai/v1",
+    model: "kimi-k2.6",
+    apiKeyHelp: "请填写 Kimi 国际平台 API Key；国际 Key 应使用 api.moonshot.ai。401 通常表示 Key 填错、平台不匹配、复制不完整或权限/额度不可用。",
+    placeholder: "粘贴 Kimi 国际 API Key",
+  },
+  baichuan: {
+    label: "百川智能",
+    provider: "compatible",
+    base_url: "https://api.baichuan-ai.com/v1",
+    model: "Baichuan4",
+    apiKeyHelp: "请填写百川智能平台生成的 API Key，不要填写 OpenAI 或其他平台的 Key。",
+    placeholder: "粘贴百川 API Key",
+  },
+  doubao: {
+    label: "豆包 / 火山方舟",
+    provider: "compatible",
+    base_url: "https://ark.cn-beijing.volces.com/api/v3",
+    model: "doubao-seed-1-6-250615",
+    apiKeyHelp: "请填写火山方舟/豆包平台生成的 API Key，不要填写 OpenAI 或其他平台的 Key。",
+    placeholder: "粘贴豆包 API Key",
+  },
+};
 
 function setVisible(element, visible) {
   if (!element) {
@@ -140,6 +242,70 @@ function populateHotkeySelect(selectElement, hotkeys, selectedValue) {
   }
 }
 
+function getLlmPreset(key) {
+  return LLM_PROVIDER_PRESETS[key] ?? LLM_PROVIDER_PRESETS.openai;
+}
+
+function inferLlmPresetKey(rewrite = {}) {
+  const provider = (rewrite.provider || "").toLowerCase();
+  const baseUrl = (rewrite.base_url || "").toLowerCase();
+  const model = (rewrite.model || "").toLowerCase();
+
+  const matches = [
+    ["minimax_cn", () => baseUrl.includes("api.minimaxi.com")],
+    ["minimax_intl", () => baseUrl.includes("api.minimax.io")],
+    ["minimax_cn", () => model.includes("minimax")],
+    ["deepseek", () => baseUrl.includes("deepseek") || model.includes("deepseek")],
+    ["qwen_cn", () => baseUrl.includes("dashscope.aliyuncs.com")],
+    ["qwen_sg", () => baseUrl.includes("dashscope-intl.aliyuncs.com")],
+    ["qwen_us", () => baseUrl.includes("dashscope-us.aliyuncs.com")],
+    ["qwen_cn", () => model.includes("qwen")],
+    ["zhipu", () => baseUrl.includes("bigmodel.cn") || model.includes("glm")],
+    ["kimi_cn", () => baseUrl.includes("moonshot.cn")],
+    ["kimi_intl", () => baseUrl.includes("moonshot.ai")],
+    ["kimi_cn", () => model.includes("kimi")],
+    ["baichuan", () => baseUrl.includes("baichuan-ai.com") || model.includes("baichuan")],
+    ["doubao", () => baseUrl.includes("volces.com") || model.includes("doubao")],
+    ["openai", () => provider === "openai" || baseUrl.includes("api.openai.com") || /^gpt[-\w.]*|^o\d/.test(model)],
+  ];
+
+  return matches.find(([, match]) => match())?.[0] ?? "openai";
+}
+
+function updateLlmPresetHints(preset) {
+  llmBaseUrlDescription.textContent = `${preset.label} 自动使用：${preset.base_url}`;
+  llmApiKeyDescription.textContent = preset.apiKeyHelp;
+  llmApiKeyInput.placeholder = preset.placeholder;
+  llmModelDescription.textContent = `${preset.label} 默认模型：${preset.model}`;
+}
+
+function applyLlmPresetToControls(presetKey, { keepApiKey = true } = {}) {
+  const preset = getLlmPreset(presetKey);
+  const existingApiKey = llmApiKeyInput.value;
+  llmProviderSelect.value = presetKey;
+  llmBaseUrlInput.value = preset.base_url;
+  llmModelInput.value = preset.model;
+  if (!keepApiKey) {
+    llmApiKeyInput.value = "";
+  } else {
+    llmApiKeyInput.value = existingApiKey;
+  }
+  updateLlmPresetHints(preset);
+}
+
+function collectLlmRewriteConfig() {
+  const preset = getLlmPreset(llmProviderSelect.value);
+  return {
+    enabled: llmEnabledToggle.checked,
+    provider: preset.provider,
+    api_key: llmApiKeyInput.value.trim(),
+    base_url: llmBaseUrlInput.value.trim() || preset.base_url,
+    model: llmModelInput.value.trim() || preset.model,
+    temperature: currentSettings?.llm_rewrite?.temperature ?? 0.3,
+    max_tokens: currentSettings?.llm_rewrite?.max_tokens ?? 4096,
+  };
+}
+
 function fillSettingsView(view) {
   isHydrating = true;
   currentSettings = structuredClone(view.settings);
@@ -168,15 +334,15 @@ function fillSettingsView(view) {
     api_key: savedLlmRewrite.api_key ?? "",
     model: savedLlmRewrite.model ?? "gpt-5.5",
   };
-  const llmProviderValue = getProviderSelectValue(llmRewrite);
+  const llmProviderValue = inferLlmPresetKey(llmRewrite);
   llmEnabledToggle.checked = llmRewrite.enabled ?? false;
-  llmProviderSelect.value = llmProviderValue;
-  llmBaseUrlInput.value = llmRewrite.base_url;
   llmApiKeyInput.value = llmRewrite.api_key;
-  llmModelInput.value = llmRewrite.model;
+  applyLlmPresetToControls(llmProviderValue);
+  llmBaseUrlInput.value = llmRewrite.base_url || getLlmPreset(llmProviderValue).base_url;
+  llmModelInput.value = llmRewrite.model || getLlmPreset(llmProviderValue).model;
   currentSettings.llm_rewrite = {
     ...llmRewrite,
-    provider: llmProviderValue,
+    ...collectLlmRewriteConfig(),
   };
   setVisible(llmConfigPanel, llmRewrite.enabled);
   llmTestStatus.textContent = "";
@@ -210,16 +376,7 @@ function fillSettingsView(view) {
 }
 
 function collectSettings() {
-  const llmRewrite = {
-    enabled: llmEnabledToggle.checked,
-    provider: llmProviderSelect.value,
-    api_key: llmApiKeyInput.value,
-    base_url: llmBaseUrlInput.value,
-    model: llmModelInput.value,
-    temperature: currentSettings?.llm_rewrite?.temperature ?? 0.3,
-    max_tokens: currentSettings?.llm_rewrite?.max_tokens ?? 4096,
-  };
-  llmRewrite.provider = getProviderSelectValue(llmRewrite);
+  const llmRewrite = collectLlmRewriteConfig();
 
   return {
     ...currentSettings,
@@ -251,52 +408,16 @@ function hasApiKeyConfig(settings) {
 }
 
 function inferLlmRoute(rewrite = {}) {
-  const provider = (rewrite.provider || "").toLowerCase();
-  const baseUrl = (rewrite.base_url || "").toLowerCase();
   const model = (rewrite.model || "").toLowerCase();
   const modelLabel = rewrite.model || "未填写模型";
-
-  const knownProviders = [
-    { key: "openai", label: "OpenAI GPT", match: () => baseUrl.includes("api.openai.com") || /^gpt[-\w.]*|^o\d/.test(model) },
-    { key: "anthropic", label: "Claude API", match: () => baseUrl.includes("anthropic.com") || model.includes("claude") },
-    { key: "minimax", label: "MiniMax", match: () => baseUrl.includes("minimax") || model.includes("minimax") },
-    { key: "deepseek", label: "DeepSeek", match: () => baseUrl.includes("deepseek") || model.includes("deepseek") },
-    { key: "qwen", label: "通义千问", match: () => baseUrl.includes("dashscope.aliyuncs.com") || model.includes("qwen") },
-    { key: "zhipu", label: "智谱 GLM", match: () => baseUrl.includes("bigmodel.cn") || model.includes("glm") },
-    { key: "kimi", label: "Kimi/月之暗面", match: () => baseUrl.includes("moonshot.ai") || model.includes("kimi") },
-    { key: "baichuan", label: "百川", match: () => baseUrl.includes("baichuan-ai.com") || model.includes("baichuan") },
-    { key: "doubao", label: "豆包", match: () => baseUrl.includes("volces.com") || model.includes("doubao") },
-  ];
-
-  const matched = knownProviders.find((entry) => entry.match());
-  if (matched) {
-    return {
-      key: matched.key,
-      label: `${matched.label} · ${modelLabel}`,
-      isOpenAi: matched.key === "openai",
-    };
-  }
-
-  if (provider === "anthropic") {
-    return { key: "anthropic", label: `Claude API · ${modelLabel}`, isOpenAi: false };
-  }
-
-  if (provider === "openai") {
-    return { key: "openai", label: `OpenAI GPT · ${modelLabel}`, isOpenAi: true };
-  }
-
-  return { key: "custom", label: `国产/第三方模型 · ${modelLabel}`, isOpenAi: false };
-}
-
-function getProviderSelectValue(rewrite = {}) {
-  const route = inferLlmRoute(rewrite);
-  if (route.key === "openai") {
-    return "openai";
-  }
-  if (route.key === "anthropic") {
-    return "anthropic";
-  }
-  return "compatible";
+  const presetKey = inferLlmPresetKey(rewrite);
+  const preset = getLlmPreset(presetKey);
+  const isOpenAi = preset.provider === "openai" || /^gpt[-\w.]*|^o\d/.test(model);
+  return {
+    key: presetKey,
+    label: `${preset.label} · ${modelLabel}`,
+    isOpenAi,
+  };
 }
 
 function getApiModelLabel(settings) {
@@ -717,6 +838,11 @@ for (const element of [
     if (element === llmEnabledToggle) {
       setVisible(llmConfigPanel, llmEnabledToggle.checked);
     }
+    if (element === llmProviderSelect) {
+      applyLlmPresetToControls(llmProviderSelect.value);
+      llmTestStatus.textContent = "";
+      llmTestStatus.dataset.tone = "";
+    }
     updateLlmActiveRoute(collectSettings());
     cancelScheduledSave();
     void persistSettings();
@@ -746,15 +872,7 @@ llmTestButton.addEventListener("click", async () => {
   llmTestStatus.textContent = "测试中...";
   llmTestStatus.dataset.tone = "";
   try {
-    const config = {
-      enabled: llmEnabledToggle.checked,
-      provider: llmProviderSelect.value,
-      api_key: llmApiKeyInput.value,
-      base_url: llmBaseUrlInput.value,
-      model: llmModelInput.value,
-      temperature: 0.3,
-      max_tokens: 4096,
-    };
+    const config = collectLlmRewriteConfig();
     const result = await electronAPI.testLlmConnection(config);
     if (result.ok) {
       llmTestStatus.textContent = `连接成功 (${result.latency_ms}ms)`;
