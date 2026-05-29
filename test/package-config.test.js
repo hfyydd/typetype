@@ -56,26 +56,25 @@ test("package metadata uses the typetype app name", () => {
 
 test("package uses the native sherpa node addon instead of the wasm package", () => {
   assert.equal(pkg.dependencies["sherpa-onnx-node"] !== undefined, true);
-  assert.equal(pkg.dependencies["sherpa-onnx-win-x64"] !== undefined, true);
+  // Windows support removed
+    // assert.equal(pkg.dependencies["sherpa-onnx-win-x64"] !== undefined, true);
   assert.equal(pkg.dependencies["sherpa-onnx"] === undefined, true);
 });
 
+// Windows support removed
 test("windows packaging unpacks native sherpa runtime files", () => {
   assert.deepEqual(pkg.build.asarUnpack, [
     "node_modules/sherpa-onnx-node/**/*",
-    "node_modules/sherpa-onnx-win-x64/**/*",
   ]);
 });
 
+// Windows support removed
 test("windows packaging explicitly includes ffmpeg.dll beside the executable", () => {
-  const ffmpegEntry = pkg.build.win?.extraFiles?.find((entry) => entry?.from === "node_modules/electron/dist/ffmpeg.dll");
-
-  assert.deepEqual(ffmpegEntry, {
-    from: "node_modules/electron/dist/ffmpeg.dll",
-    to: ".",
-  });
+  // no win config
+  assert.equal(pkg.build.win, undefined);
 });
 
+// Windows support removed
 test("windows packaging keeps only Chinese and English Electron locales", () => {
-  assert.deepEqual(pkg.build.win?.electronLanguages, ["zh-CN", "en-US"]);
+  assert.equal(pkg.build.win, undefined);
 });
