@@ -1,7 +1,7 @@
 {
   "name": "typetype",
   "version": "0.1.1",
-  "description": "Local voice input tool with offline ASR",
+  "description": "TypeYourMind local voice input tool with offline ASR",
   "main": "dist-electron/main.js",
   "author": "typetype",
   "license": "MIT",
@@ -30,7 +30,7 @@
   },
   "build": {
     "appId": "app.typetype",
-    "productName": "typetype",
+    "productName": "TypeYourMind",
     "electronDist": "node_modules/electron/dist",
     "afterPack": "scripts/after-pack-rcedit.cjs",
     "directories": {

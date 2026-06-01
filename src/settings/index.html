@@ -3,16 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>typetype 设置</title>
+    <title>TypeYourMind 设置</title>
     <link rel="stylesheet" href="../shared/base.css" />
   </head>
   <body class="settings-shell">
     <main class="settings-layout">
       <aside class="settings-sidebar">
         <div class="settings-brand">
-          <div class="settings-brand-mark">tn</div>
+          <div class="settings-brand-mark">TY</div>
           <div>
-            <h1>typetype</h1>
+            <h1>TypeYourMind</h1>
             <p>本地语音输入</p>
           </div>
         </div>
@@ -66,6 +66,17 @@
                   <select id="translate_hotkey" data-setting="translate_hotkey"></select>
                 </div>
               </label>
+
+              <div class="settings-row settings-row-stack">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">快捷键方案</span>
+                  <span class="settings-row-description">用过 Typeless 的客户可一键切换成右 Alt 习惯；当前默认方案仍保留。</span>
+                </div>
+                <div class="settings-inline-actions">
+                  <button type="button" id="hotkey-profile-default" class="settings-secondary-button">typetype 默认</button>
+                  <button type="button" id="hotkey-profile-typeless" class="settings-secondary-button">Typeless 兼容</button>
+                </div>
+              </div>
             </section>
 
             <section class="settings-group">
@@ -354,7 +365,7 @@
                   </div>
                   <div class="settings-row-control settings-select-wrap">
                     <select id="llm_provider" data-setting="llm_provider">
-                      <option value="openai">OpenAI GPT</option>
+                      <option value="openai">OpenAI GPT（快速推荐）</option>
                       <option value="minimax_cn">MiniMax 国内版</option>
                       <option value="minimax_intl">MiniMax 国际版</option>
                       <option value="deepseek">DeepSeek</option>
@@ -364,6 +375,10 @@
                       <option value="zhipu">智谱 GLM</option>
                       <option value="kimi_cn">Kimi / 月之暗面国内版</option>
                       <option value="kimi_intl">Kimi 国际版</option>
+                      <option value="siliconflow">硅基流动</option>
+                      <option value="baidu_cn">百度千帆国内版</option>
+                      <option value="baidu_intl">百度千帆国际版</option>
+                      <option value="gemini">Google Gemini</option>
                       <option value="baichuan">百川智能</option>
                       <option value="doubao">豆包 / 火山方舟</option>
                     </select>
@@ -403,8 +418,9 @@
                 <div class="settings-provider-guide">
                   <div><strong>傻瓜式填写：</strong>先选模型平台，软件会自动填 Base URL 和模型名；客户只粘贴该平台自己的 API Key。</div>
                   <div>国内版和国际版不能混用：例如 Kimi 国内平台 Key 要选择 <code>Kimi / 月之暗面国内版</code>，国际平台 Key 才选择 <code>Kimi 国际版</code>。</div>
-                  <div>MiniMax 和通义千问也区分地域地址，请按客户创建 API Key 的平台/地域选择。</div>
-                  <div>如果测试连接返回 401，通常是 API Key 填错、复制不完整、Key 所属平台不匹配，或账户额度/权限不可用。</div>
+                  <div>MiniMax、通义千问、百度千帆也区分地域地址，请按客户创建 API Key 的平台/地域选择。</div>
+                  <div>小牛翻译 API 属于翻译接口，不适合放在结构化润写里；后续会放到“翻译 API”模块。</div>
+                  <div>如果测试连接返回 401，通常是 API Key 填错、复制不完整、Key 所属平台不匹配，或账户额度/权限不可用；fetch failed 通常是网络、代理或 TLS 连接问题。</div>
                 </div>
 
                 <div class="settings-row">
@@ -426,7 +442,7 @@
             <section class="settings-group">
               <div class="settings-group-heading">
                 <h3>系统权限</h3>
-                <p id="permissions-summary">typetype 只依赖本机权限完成录音、全局快捷键触发和自动回填。</p>
+                <p id="permissions-summary">TypeYourMind 只依赖本机权限完成录音、全局快捷键触发和自动回填。</p>
               </div>
 
               <div class="settings-row" id="microphone-settings-row">

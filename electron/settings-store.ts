@@ -44,7 +44,7 @@ export class SettingsStore {
         provider: 'openai',
         api_key: '',
         base_url: 'https://api.openai.com/v1',
-        model: 'gpt-5.5',
+        model: 'gpt-5.1',
         temperature: 0.3,
         max_tokens: 4096,
       },

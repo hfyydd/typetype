@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="TypeYourMind logo candidate 3">
+  <rect width="256" height="256" rx="48" fill="#EDF3F5"/>
+  <path d="M57 123c0-42 32-75 75-75 37 0 67 25 67 59 0 23-13 43-34 51 8 9 13 22 13 36H89c-18 0-32-14-32-32v-39Z" fill="#6F8EA1"/>
+  <path d="M92 103c8-19 24-30 43-30 17 0 31 9 36 23M89 133c25-15 59-13 84 5M95 165c19 7 43 6 61-4" fill="none" stroke="#F9FCFD" stroke-width="10" stroke-linecap="round"/>
+  <path d="M78 205h72M78 182h102M78 159h48" stroke="#243541" stroke-width="12" stroke-linecap="round"/>
+  <path d="M188 173v38" stroke="#243541" stroke-width="10" stroke-linecap="round"/>
+  <circle cx="96" cy="103" r="7" fill="#243541"/>
+  <circle cx="172" cy="137" r="7" fill="#243541"/>
+</svg>

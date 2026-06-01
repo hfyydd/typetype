@@ -7,6 +7,8 @@ const panels = Array.from(document.querySelectorAll(".settings-panel"));
 const microphoneSelect = document.querySelector("#microphone_id");
 const hotkeySelect = document.querySelector("#hotkey");
 const translateHotkeySelect = document.querySelector("#translate_hotkey");
+const hotkeyProfileDefaultButton = document.querySelector("#hotkey-profile-default");
+const hotkeyProfileTypelessButton = document.querySelector("#hotkey-profile-typeless");
 const autoPasteToggle = document.querySelector("#auto_paste");
 const launchAtLoginToggle = document.querySelector("#launch_at_login");
 const recognitionModeSelect = document.querySelector("#recognition_mode");
@@ -90,12 +92,12 @@ const TEXT_INPUT_SAVE_DELAY_MS = 450;
 
 const LLM_PROVIDER_PRESETS = {
   openai: {
-    label: "OpenAI GPT",
+    label: "OpenAI GPT（快速推荐）",
     provider: "openai",
     base_url: "https://api.openai.com/v1",
-    model: "gpt-5.5",
+    model: "gpt-5.1",
     temperature: 0.3,
-    apiKeyHelp: "请填写 OpenAI Platform API Key；ChatGPT Plus/Pro 订阅不等于 API 免费额度。获取地址：https://platform.openai.com/api-keys",
+    apiKeyHelp: "请填写 OpenAI Platform API Key；ChatGPT Plus/Pro 订阅不等于 API 免费额度。默认使用适合语音润写的快速模型，可手动改成更高质量模型。获取地址：https://platform.openai.com/api-keys",
     placeholder: "粘贴 OpenAI Platform API Key",
   },
   minimax_cn: {
@@ -156,28 +158,64 @@ const LLM_PROVIDER_PRESETS = {
     label: "智谱 GLM",
     provider: "compatible",
     base_url: "https://open.bigmodel.cn/api/paas/v4",
-    model: "glm-5.1",
+    model: "glm-4.7-flash",
     temperature: 0.3,
-    apiKeyHelp: "请填写智谱开放平台 API Key，不要填写 OpenAI 或其他平台的 Key。",
+    apiKeyHelp: "请填写智谱开放平台 API Key，不要填写 OpenAI 或其他平台的 Key。默认使用 Flash 快速模型，适合语音润写。",
     placeholder: "粘贴智谱 API Key",
   },
   kimi_cn: {
     label: "Kimi / 月之暗面国内版",
     provider: "compatible",
     base_url: "https://api.moonshot.cn/v1",
-    model: "kimi-k2.5",
+    model: "moonshot-v1-8k",
     temperature: 1,
-    apiKeyHelp: "请填写 Kimi 国内开放平台 API Key；国内 Key 应使用 api.moonshot.cn。401 通常表示 Key 填错、平台不匹配、复制不完整或权限/额度不可用。",
+    apiKeyHelp: "请填写 Kimi 国内开放平台 API Key；国内 Key 应使用 api.moonshot.cn。默认使用更快的 moonshot-v1-8k，想要更强效果可手动改为平台可用的 Kimi 模型。",
     placeholder: "粘贴 Kimi 国内 API Key",
   },
   kimi_intl: {
     label: "Kimi 国际版",
     provider: "compatible",
     base_url: "https://api.moonshot.ai/v1",
-    model: "kimi-k2.6",
+    model: "moonshot-v1-8k",
     temperature: 1,
-    apiKeyHelp: "请填写 Kimi 国际平台 API Key；国际 Key 应使用 api.moonshot.ai。401 通常表示 Key 填错、平台不匹配、复制不完整或权限/额度不可用。",
+    apiKeyHelp: "请填写 Kimi 国际平台 API Key；国际 Key 应使用 api.moonshot.ai。默认使用更快的 moonshot-v1-8k，想要更强效果可手动改为平台可用的 Kimi 模型。",
     placeholder: "粘贴 Kimi 国际 API Key",
+  },
+  siliconflow: {
+    label: "硅基流动",
+    provider: "compatible",
+    base_url: "https://api.siliconflow.cn/v1",
+    model: "zai-org/GLM-4.7-Flash",
+    temperature: 0.3,
+    apiKeyHelp: "请填写硅基流动 API Key。默认使用轻量快速模型；如账号模型名不同，可在硅基流动模型列表复制可用模型名。",
+    placeholder: "粘贴硅基流动 API Key",
+  },
+  baidu_cn: {
+    label: "百度千帆国内版",
+    provider: "compatible",
+    base_url: "https://qianfan.baidubce.com/v2",
+    model: "ernie-speed-pro-128k",
+    temperature: 0.3,
+    apiKeyHelp: "请填写百度千帆国内平台 API Key。默认使用 ERNIE Speed 快速模型，适合语音润写。",
+    placeholder: "粘贴百度千帆国内 API Key",
+  },
+  baidu_intl: {
+    label: "百度千帆国际版",
+    provider: "compatible",
+    base_url: "https://api.baiduqianfan.ai/v1",
+    model: "ernie-speed-pro-128k",
+    temperature: 0.3,
+    apiKeyHelp: "请填写百度千帆国际平台 API Key。国内和国际 Key 不要混用。",
+    placeholder: "粘贴百度千帆国际 API Key",
+  },
+  gemini: {
+    label: "Google Gemini",
+    provider: "compatible",
+    base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+    model: "gemini-2.5-flash",
+    temperature: 0.3,
+    apiKeyHelp: "请填写 Google AI Studio 生成的 Gemini API Key。默认使用 Gemini Flash 快速模型。",
+    placeholder: "粘贴 Gemini API Key",
   },
   baichuan: {
     label: "百川智能",
@@ -276,6 +314,11 @@ function inferLlmPresetKey(rewrite = {}) {
     ["kimi_cn", () => baseUrl.includes("moonshot.cn")],
     ["kimi_intl", () => baseUrl.includes("moonshot.ai")],
     ["kimi_cn", () => model.includes("kimi")],
+    ["siliconflow", () => baseUrl.includes("siliconflow")],
+    ["baidu_cn", () => baseUrl.includes("qianfan.baidubce.com")],
+    ["baidu_intl", () => baseUrl.includes("baiduqianfan.ai")],
+    ["baidu_cn", () => model.includes("ernie")],
+    ["gemini", () => baseUrl.includes("generativelanguage.googleapis.com") || model.includes("gemini")],
     ["baichuan", () => baseUrl.includes("baichuan-ai.com") || model.includes("baichuan")],
     ["doubao", () => baseUrl.includes("volces.com") || model.includes("doubao")],
     ["openai", () => provider === "openai" || baseUrl.includes("api.openai.com") || /^gpt[-\w.]*|^o\d/.test(model)],
@@ -344,7 +387,7 @@ function fillSettingsView(view) {
     provider: savedLlmRewrite.provider ?? "openai",
     base_url: savedLlmRewrite.base_url ?? "https://api.openai.com/v1",
     api_key: savedLlmRewrite.api_key ?? "",
-    model: savedLlmRewrite.model ?? "gpt-5.5",
+    model: savedLlmRewrite.model ?? "gpt-5.1",
   };
   const llmProviderValue = inferLlmPresetKey(llmRewrite);
   llmEnabledToggle.checked = llmRewrite.enabled ?? false;
@@ -368,7 +411,7 @@ function fillSettingsView(view) {
   setVisible(inputMonitoringSettingsRow, view.show_input_monitoring_settings);
   permissionsSummary.textContent = view.permissions_summary;
 
-  appVersion.textContent = `typetype ${view.app_version}`;
+  appVersion.textContent = `TypeYourMind ${view.app_version}`;
   runtimeModeLabel.textContent = view.runtime_mode_label;
   modelLabel.textContent = view.model_label;
   modelStatus.textContent = view.model_status;
@@ -818,6 +861,20 @@ function schedulePersistSettings() {
   }, TEXT_INPUT_SAVE_DELAY_MS);
 }
 
+function applyHotkeyProfile(profile) {
+  if (profile === "typeless") {
+    hotkeySelect.value = "TypelessDictation";
+    translateHotkeySelect.value = "TypelessTranslation";
+    setStatus("已切换为 Typeless 兼容快捷键：右 Alt 语音、右 Alt + Shift 翻译。");
+  } else {
+    hotkeySelect.value = "CtrlSlash";
+    translateHotkeySelect.value = "CtrlDot";
+    setStatus("已切换为 typetype 默认快捷键：Ctrl+/ 语音、Ctrl+. 翻译。");
+  }
+  cancelScheduledSave();
+  void persistSettings();
+}
+
 async function runAction(command, successMessage, failureMessage = "请求没有成功。已写入本地日志。") {
   try {
     await electronAPI[command]();
@@ -830,6 +887,9 @@ async function runAction(command, successMessage, failureMessage = "请求没有
 for (const item of navItems) {
   item.addEventListener("click", () => activatePanel(item.dataset.panelTarget));
 }
+
+hotkeyProfileDefaultButton.addEventListener("click", () => applyHotkeyProfile("default"));
+hotkeyProfileTypelessButton.addEventListener("click", () => applyHotkeyProfile("typeless"));
 
 for (const element of [
   hotkeySelect,
@@ -887,8 +947,16 @@ llmTestButton.addEventListener("click", async () => {
     const config = collectLlmRewriteConfig();
     const result = await electronAPI.testLlmConnection(config);
     if (result.ok) {
-      llmTestStatus.textContent = `连接成功 (${result.latency_ms}ms)`;
-      llmTestStatus.dataset.tone = "default";
+      if (result.latency_ms >= 8000) {
+        llmTestStatus.textContent = `连接成功但偏慢 (${result.latency_ms}ms)，建议换快速模型或检查网络/代理。`;
+        llmTestStatus.dataset.tone = "warning";
+      } else if (result.latency_ms >= 4000) {
+        llmTestStatus.textContent = `连接成功，速度一般 (${result.latency_ms}ms)。`;
+        llmTestStatus.dataset.tone = "warning";
+      } else {
+        llmTestStatus.textContent = `连接成功 (${result.latency_ms}ms)`;
+        llmTestStatus.dataset.tone = "default";
+      }
     } else {
       llmTestStatus.textContent = `失败: ${result.error}`;
       llmTestStatus.dataset.tone = "error";

@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="TypeYourMind logo candidate 5">
+  <defs>
+    <linearGradient id="g5" x1="54" y1="34" x2="200" y2="218" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#A6BBC8"/>
+      <stop offset="1" stop-color="#56788B"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="50" fill="#1F2A33"/>
+  <path d="M57 114c0-40 31-71 72-71 44 0 76 30 76 72 0 33-20 59-50 69" fill="none" stroke="url(#g5)" stroke-width="18" stroke-linecap="round"/>
+  <path d="M89 93c13-14 33-21 54-16M84 124c25-12 58-10 83 6M96 155c19 9 43 8 61-3" fill="none" stroke="#EEF5F7" stroke-width="10" stroke-linecap="round"/>
+  <path d="M65 202h109M65 176h85M65 150h38" stroke="#EEF5F7" stroke-width="12" stroke-linecap="round"/>
+  <path d="M186 160v57" stroke="#A6BBC8" stroke-width="11" stroke-linecap="round"/>
+  <path d="M186 160l17 12M186 160l-17 12" stroke="#A6BBC8" stroke-width="9" stroke-linecap="round"/>
+</svg>

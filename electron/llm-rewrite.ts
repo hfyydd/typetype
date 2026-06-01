@@ -95,7 +95,7 @@ export class LlmRewriteEngine {
 
       if (!response.ok) {
         const errorText = await response.text().catch(() => '');
-        throw new Error(`LLM API error (${response.status}): ${errorText || response.statusText}`);
+        throw new Error(formatLlmApiError(response.status, errorText || response.statusText));
       }
 
       const data = await response.json();
@@ -104,7 +104,7 @@ export class LlmRewriteEngine {
       return { polished_text: polishedText || rawText };
     } catch (error) {
       console.error('[llm-rewrite] API call failed:', error);
-      throw error;
+      throw new Error(formatLlmRuntimeError(error));
     }
   }
 
@@ -172,11 +172,71 @@ ${SCENARIO_PROMPTS[scenario] ?? SCENARIO_PROMPTS.general}${voiceFormatting}`;
 export async function testLlmConnection(config: LlmRewriteConfig): Promise<{ ok: boolean; latency_ms: number; error?: string }> {
   const start = Date.now();
   try {
-    const engine = new LlmRewriteEngine(config);
+    const engine = new LlmRewriteEngine({
+      ...config,
+      max_tokens: Math.min(config.max_tokens ?? 4096, 96),
+    });
     // Send a minimal test request
     await engine.rewrite('测试连接');
     return { ok: true, latency_ms: Date.now() - start };
   } catch (e) {
-    return { ok: false, latency_ms: Date.now() - start, error: String(e) };
+    return { ok: false, latency_ms: Date.now() - start, error: formatLlmRuntimeError(e) };
   }
+}
+
+function formatLlmApiError(status: number, detail: string): string {
+  const cleanDetail = compactErrorDetail(detail);
+  const lower = cleanDetail.toLowerCase();
+
+  if (status === 401 || lower.includes('unauthorized') || lower.includes('invalid authentication')) {
+    return `LLM API error (${status}): 认证失败。请检查 API Key 是否复制完整、是否属于当前选择的平台/国内国际地址、账户是否有额度和权限。${cleanDetail}`;
+  }
+
+  if (status === 403) {
+    return `LLM API error (${status}): 权限不足。该 API Key 可能没有开通当前模型、账户额度不足，或平台限制了调用权限。${cleanDetail}`;
+  }
+
+  if (status === 404) {
+    return `LLM API error (${status}): 模型或接口地址不存在。请检查 Base URL 和模型名是否来自同一个平台。${cleanDetail}`;
+  }
+
+  if (status === 429) {
+    return `LLM API error (${status}): 请求过快或额度不足。请稍后重试，或检查平台余额、并发和限速。${cleanDetail}`;
+  }
+
+  if (status === 400) {
+    if (lower.includes('temperature') && lower.includes('only 1')) {
+      return `LLM API error (${status}): 当前模型只允许 temperature=1，已建议使用该模型对应的预设；请重新选择厂家预设后再测试。${cleanDetail}`;
+    }
+    return `LLM API error (${status}): 请求参数不被平台接受。常见原因是模型名填错、模型和 Base URL 不匹配，或该模型不支持当前参数。${cleanDetail}`;
+  }
+
+  if (status >= 500) {
+    return `LLM API error (${status}): 模型平台服务异常或网络网关异常，请稍后重试或换一个平台测试。${cleanDetail}`;
+  }
+
+  return `LLM API error (${status}): ${cleanDetail}`;
+}
+
+function formatLlmRuntimeError(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const clean = compactErrorDetail(raw);
+  const lower = clean.toLowerCase();
+
+  if (lower.includes('fetch failed') || lower.includes('econn') || lower.includes('enotfound') || lower.includes('etimedout')) {
+    return `网络连接失败：无法连接到模型平台。请检查网络、代理、公司防火墙、系统时间和 TLS/证书设置；如果同一电脑浏览器也打不开该平台，就是网络问题。${clean}`;
+  }
+
+  if (lower.includes('ssl') || lower.includes('tls') || lower.includes('certificate') || lower.includes('schannel')) {
+    return `安全连接失败：TLS/证书握手没有成功。请检查代理、杀毒软件 HTTPS 扫描、系统证书和平台域名是否可访问。${clean}`;
+  }
+
+  return clean;
+}
+
+function compactErrorDetail(detail: string): string {
+  return String(detail ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 900);
 }

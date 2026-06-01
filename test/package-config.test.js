@@ -48,9 +48,9 @@ test("electron-builder packages bundled translation runtimes as extra resources"
   });
 });
 
-test("package metadata uses the typetype app name", () => {
+test("package metadata keeps the typetype app id while showing the TypeYourMind product name", () => {
   assert.equal(pkg.name, "typetype");
-  assert.equal(pkg.build.productName, "typetype");
+  assert.equal(pkg.build.productName, "TypeYourMind");
   assert.equal(pkg.build.appId, "app.typetype");
 });
 

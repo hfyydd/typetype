@@ -218,6 +218,8 @@ test("ShortcutManager exposes Windows dictation and translation shortcuts", () =
 
   assert.equal(values.includes("CtrlSlash"), true);
   assert.equal(values.includes("CtrlDot"), true);
+  assert.equal(values.includes("TypelessDictation"), true);
+  assert.equal(values.includes("TypelessTranslation"), true);
   assert.equal(values.includes("F8"), true);
   assert.equal(values.includes("F9"), true);
 });

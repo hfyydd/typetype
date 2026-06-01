@@ -7,6 +7,7 @@ import {
   ipcMain,
   session,
   dialog,
+  powerMonitor,
 } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -98,6 +99,7 @@ class TypenewApp {
   private activeCaptureIntent: CaptureIntent = 'dictation';
   private translationEngine: TranslationEngine;
   private dictionaryStore: DictionaryStore;
+  private shortcutWatchdogTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     this.settingsStore = new SettingsStore();
@@ -226,6 +228,11 @@ class TypenewApp {
   private setupApp(): void {
     app.on('before-quit', () => {
       this.isQuitting = true;
+      if (this.shortcutWatchdogTimer) {
+        clearInterval(this.shortcutWatchdogTimer);
+        this.shortcutWatchdogTimer = null;
+      }
+      this.shortcutManager.unregisterAll();
       this.translationEngine.dispose();
     });
 
@@ -250,6 +257,14 @@ class TypenewApp {
         }
         this.settingsWindow.focus();
       }
+    });
+
+    powerMonitor.on('resume', () => {
+      this.repairShortcutsIfNeeded('system-resume');
+    });
+
+    powerMonitor.on('unlock-screen', () => {
+      this.repairShortcutsIfNeeded('screen-unlock');
     });
   }
 
@@ -301,7 +316,7 @@ class TypenewApp {
 
   private createOverlayWindow(): void {
     const overlayPath = path.join(__dirname, '..', 'src', 'overlay', 'index.html');
-    this.overlayWindow = new OverlayWindow(overlayPath);
+    this.overlayWindow = new OverlayWindow(overlayPath, this.getDataDir());
     this.overlayWindow.create();
   }
 
@@ -395,7 +410,7 @@ class TypenewApp {
       width: 1180,
       height: 820,
       show: false,
-      title: 'typetype Settings',
+      title: 'TypeYourMind Settings',
       webPreferences: {
         preload: path.join(__dirname, 'preload.js'),
         contextIsolation: true,
@@ -491,7 +506,7 @@ class TypenewApp {
       },
       { type: 'separator' },
       {
-        label: '退出 typetype',
+        label: '退出 TypeYourMind',
         click: () => {
           this.isQuitting = true;
           app.quit();
@@ -535,7 +550,8 @@ class TypenewApp {
 
   private registerShortcut(): void {
     const settings = this.settingsStore.getSettings();
-    this.registerShortcutsForSettings(settings);
+    this.registerShortcutsForSettings(settings, 'startup');
+    this.startShortcutWatchdog();
   }
 
   private handleShortcutToggle(intent: CaptureIntent): void {
@@ -574,7 +590,7 @@ class TypenewApp {
     });
   }
 
-  private registerShortcutsForSettings(settings: Settings): void {
+  private registerShortcutsForSettings(settings: Settings, reason = 'settings'): void {
     if (settings.hotkey === settings.translate_hotkey) {
       throw new Error('翻译快捷键不能和语音输入快捷键相同。');
     }
@@ -599,6 +615,7 @@ class TypenewApp {
     );
 
     console.log('Global shortcut registration', {
+      reason,
       dictation: {
         requested: settings.hotkey,
         active: this.shortcutManager.getCurrentHotkey('dictation'),
@@ -617,6 +634,39 @@ class TypenewApp {
 
     if (!translationSuccess) {
       console.warn('Translation shortcut registration failed; dictation shortcut remains active');
+    }
+  }
+
+  private startShortcutWatchdog(): void {
+    if (this.shortcutWatchdogTimer) {
+      clearInterval(this.shortcutWatchdogTimer);
+    }
+
+    this.shortcutWatchdogTimer = setInterval(() => {
+      this.repairShortcutsIfNeeded('watchdog');
+    }, 15000);
+  }
+
+  private repairShortcutsIfNeeded(reason: string): void {
+    if (this.isQuitting) {
+      return;
+    }
+
+    const health = this.shortcutManager.getRegistrationHealth();
+    if (health.ok) {
+      return;
+    }
+
+    console.warn('Global shortcut registration health check failed; repairing', {
+      reason,
+      missing: health.missing,
+    });
+
+    try {
+      this.registerShortcutsForSettings(this.settingsStore.getSettings(), reason);
+      this.publishSettingsViewData();
+    } catch (error) {
+      console.error('Failed to repair global shortcuts:', error);
     }
   }
 
@@ -714,7 +764,7 @@ class TypenewApp {
   }
 
   private openFeedbackEmail(): void {
-    const subject = encodeURIComponent('typetype feedback');
+    const subject = encodeURIComponent('TypeYourMind feedback');
     shell.openExternal(`mailto:${FEEDBACK_EMAIL}?subject=${subject}`);
   }
 
@@ -749,13 +799,14 @@ class TypenewApp {
       show_accessibility_settings: process.platform === 'darwin',
       show_input_monitoring_settings: process.platform === 'darwin',
       permissions_summary: process.platform === 'darwin'
-        ? 'typetype 依赖麦克风、输入监听和辅助功能权限完成全局录音触发与自动回填。'
-        : 'typetype 使用本机权限完成语音输入。',
+        ? 'TypeYourMind 依赖麦克风、输入监听和辅助功能权限完成全局录音触发与自动回填。'
+        : 'TypeYourMind 使用本机权限完成语音输入。',
     };
   }
 
   private async saveSettings(settings: Settings): Promise<UiSnapshot> {
-    this.registerShortcutsForSettings(settings);
+    this.registerShortcutsForSettings(settings, 'settings-save');
+    this.startShortcutWatchdog();
     this.settingsStore.saveSettings(settings);
     this.stateMachine.applySettings(settings);
     this.applyLoginItemSettings(settings);

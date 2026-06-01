@@ -50,6 +50,9 @@ test("settings UI exposes current LLM rewrite controls without legacy polish fie
   assert.equal(html.includes("大模型厂家"), true);
   assert.equal(html.includes("Kimi / 月之暗面国内版"), true);
   assert.equal(html.includes("Kimi 国际版"), true);
+  assert.equal(html.includes("硅基流动"), true);
+  assert.equal(html.includes("百度千帆国内版"), true);
+  assert.equal(html.includes("Google Gemini"), true);
   assert.equal(html.includes("MiniMax 国内版"), true);
   assert.equal(html.includes("MiniMax 国际版"), true);
   assert.equal(html.includes("通义千问 / 阿里云百炼（北京）"), true);
@@ -57,6 +60,9 @@ test("settings UI exposes current LLM rewrite controls without legacy polish fie
   assert.equal(html.includes("通义千问 / 阿里云百炼（美国）"), true);
   assert.equal(script.includes('base_url: "https://api.moonshot.cn/v1"'), true);
   assert.equal(script.includes('base_url: "https://api.moonshot.ai/v1"'), true);
+  assert.equal(script.includes('base_url: "https://api.siliconflow.cn/v1"'), true);
+  assert.equal(script.includes('base_url: "https://qianfan.baidubce.com/v2"'), true);
+  assert.equal(script.includes('base_url: "https://generativelanguage.googleapis.com/v1beta/openai"'), true);
   assert.equal(script.includes("temperature: 1"), true);
   assert.equal(script.includes('base_url: "https://dashscope-us.aliyuncs.com/compatible-mode/v1"'), true);
   assert.equal(script.includes("collectLlmRewriteConfig"), true);

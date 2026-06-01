@@ -18,6 +18,15 @@ interface ShortcutRegistration {
   activeHotkeys: string[];
 }
 
+export interface ShortcutHealth {
+  ok: boolean;
+  missing: Array<{
+    actionId: string;
+    hotkey: string;
+    accelerator: string;
+  }>;
+}
+
 export class ShortcutManager {
   private registrations = new Map<string, ShortcutRegistration>();
 
@@ -26,6 +35,9 @@ export class ShortcutManager {
       return [
         { value: 'CtrlSlash', label: 'Ctrl + /（备用 F8）', accelerator: 'Control+/' },
         { value: 'CtrlDot', label: 'Ctrl + .（备用 F9）', accelerator: 'Control+.' },
+        { value: 'TypelessDictation', label: '右 Alt / AltGr（Typeless 语音）', accelerator: 'AltGr' },
+        { value: 'TypelessFreeMode', label: '右 Alt + Space（Typeless 问答/备用）', accelerator: 'AltGr+Space' },
+        { value: 'TypelessTranslation', label: '右 Alt + Shift（Typeless 翻译）', accelerator: 'AltGr+Shift' },
         { value: 'F8', label: 'F8（语音输入备用）', accelerator: 'F8' },
         { value: 'F9', label: 'F9（翻译备用）', accelerator: 'F9' },
       ];
@@ -162,6 +174,28 @@ export class ShortcutManager {
     return this.registrations.get(actionId)?.activeHotkeys.join(',') ?? null;
   }
 
+  getRegistrationHealth(): ShortcutHealth {
+    const missing: ShortcutHealth['missing'] = [];
+
+    for (const [actionId, registration] of this.registrations.entries()) {
+      for (let index = 0; index < registration.accelerators.length; index += 1) {
+        const accelerator = registration.accelerators[index];
+        if (!globalShortcut.isRegistered(accelerator)) {
+          missing.push({
+            actionId,
+            hotkey: registration.activeHotkeys[index] ?? registration.hotkey,
+            accelerator,
+          });
+        }
+      }
+    }
+
+    return {
+      ok: missing.length === 0,
+      missing,
+    };
+  }
+
   private getCandidateHotkeys(hotkey: string, disabledFallbackHotkeys: string[] = []): string[] {
     const accelerator = this.acceleratorForHotkey(hotkey);
     if (!accelerator) {
@@ -190,6 +224,14 @@ export class ShortcutManager {
     }
 
     if (hotkey === 'CtrlDot') {
+      return ['F9'];
+    }
+
+    if (hotkey === 'TypelessDictation' || hotkey === 'TypelessFreeMode') {
+      return ['F8'];
+    }
+
+    if (hotkey === 'TypelessTranslation') {
       return ['F9'];
     }
 
