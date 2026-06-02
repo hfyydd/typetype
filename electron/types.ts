@@ -1,4 +1,5 @@
 export type RecognitionMode = 'non_streaming' | 'streaming_output';
+export type StreamingEnhancementMode = 'offline_private' | 'online_enhanced';
 export type ComputeBackend = 'auto' | 'cpu' | 'gpu';
 export type TranslationTargetLanguage =
   | 'zh'
@@ -48,7 +49,35 @@ export type RewriteScenario =
   | 'message_reply'
   | 'todo_list'
   | 'study_notes'
-  | 'customer_service';
+  | 'customer_service'
+  | 'official_resolution'
+  | 'official_decision'
+  | 'official_order'
+  | 'official_communique'
+  | 'official_announcement'
+  | 'official_public_notice'
+  | 'official_opinion'
+  | 'official_notice'
+  | 'official_circular'
+  | 'official_report'
+  | 'official_request'
+  | 'official_reply'
+  | 'official_proposal'
+  | 'official_letter'
+  | 'official_minutes'
+  | 'business_notice'
+  | 'business_plan'
+  | 'business_summary'
+  | 'business_proposal'
+  | 'business_email'
+  | 'business_memo'
+  | 'business_application'
+  | 'business_meeting_minutes'
+  | 'student_leave_note'
+  | 'student_report'
+  | 'student_activity_plan'
+  | 'student_speech'
+  | 'student_review';
 
 export interface LlmRewriteConfig {
   enabled: boolean;
@@ -155,11 +184,32 @@ export interface Settings {
   translation_target_language: TranslationTargetLanguage;
   auto_learning_enabled: boolean;
   voice_formatting_enabled: boolean;
+  streaming_ai_panel_enabled: boolean;
+  streaming_enhancement_mode: StreamingEnhancementMode;
   rewrite_scenario: RewriteScenario;
   custom_dictionary: Array<{ from: string; to: string }>;
   model_path: string | null;
   pinned_model_version: string;
   llm_rewrite: LlmRewriteConfig;
+}
+
+export type StreamingAiPanelStatus = 'idle' | 'recording' | 'thinking' | 'ready' | 'error';
+
+export interface StreamingAiPanelState {
+  enabled: boolean;
+  active: boolean;
+  status: StreamingAiPanelStatus;
+  status_text: string;
+  raw_text: string;
+  refined_raw_text: string;
+  ai_text: string;
+  can_apply_refined_raw: boolean;
+  apply_status_text: string | null;
+  mode_label: string;
+  ai_status_label: string;
+  last_review_at: string | null;
+  last_error: string | null;
+  updated_at: string | null;
 }
 
 export interface HotkeyOption {
@@ -198,6 +248,23 @@ export interface SettingsViewData {
   show_accessibility_settings: boolean;
   show_input_monitoring_settings: boolean;
   permissions_summary: string;
+  preload_status: PreloadStatusView;
+}
+
+export type PreloadResourceStatus = 'warming' | 'ready' | 'error' | 'not_configured' | 'configured';
+
+export interface PreloadResourceView {
+  status: PreloadResourceStatus;
+  label: string;
+  detail: string;
+}
+
+export interface PreloadStatusView {
+  asr: PreloadResourceView;
+  punctuation: PreloadResourceView;
+  translation: PreloadResourceView;
+  dictionary: PreloadResourceView;
+  llm: PreloadResourceView;
 }
 
 export interface AsrDiagnostics {

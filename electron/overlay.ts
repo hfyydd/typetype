@@ -31,7 +31,7 @@ export class OverlayWindow {
       focusable: false,
       alwaysOnTop: true,
       skipTaskbar: true,
-      title: 'TypeYourMind Overlay',
+      title: 'typetype Overlay',
       webPreferences: {
         preload: preloadPath,
         contextIsolation: true,

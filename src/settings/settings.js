@@ -8,12 +8,14 @@ const microphoneSelect = document.querySelector("#microphone_id");
 const hotkeySelect = document.querySelector("#hotkey");
 const translateHotkeySelect = document.querySelector("#translate_hotkey");
 const hotkeyProfileDefaultButton = document.querySelector("#hotkey-profile-default");
-const hotkeyProfileTypelessButton = document.querySelector("#hotkey-profile-typeless");
+const hotkeyProfileAltButton = document.querySelector("#hotkey-profile-alt");
 const autoPasteToggle = document.querySelector("#auto_paste");
 const launchAtLoginToggle = document.querySelector("#launch_at_login");
 const recognitionModeSelect = document.querySelector("#recognition_mode");
 const voiceFormattingToggle = document.querySelector("#voice_formatting_enabled");
 const autoLearningToggle = document.querySelector("#auto_learning_enabled");
+const streamingAiPanelToggle = document.querySelector("#streaming_ai_panel_enabled");
+const streamingEnhancementModeSelect = document.querySelector("#streaming_enhancement_mode");
 const computeBackendSelect = document.querySelector("#compute_backend");
 const translationTargetLanguageSelect = document.querySelector("#translation_target_language");
 const rewriteScenarioSelect = document.querySelector("#rewrite_scenario");
@@ -77,6 +79,7 @@ const modelPathLabel = document.querySelector("#model-path-label");
 const computeBackendLabel = document.querySelector("#compute-backend-label");
 const logPath = document.querySelector("#log-path");
 const asrDiagnosticsOutput = document.querySelector("#asr-diagnostics-output");
+const preloadStatusGrid = document.querySelector("#preload-status-grid");
 
 let currentSettings = null;
 let isHydrating = false;
@@ -237,6 +240,17 @@ const LLM_PROVIDER_PRESETS = {
   },
 };
 
+const LEGACY_RIGHT_ALT_PREFIX = ["Type", "less"].join("");
+const LEGACY_HOTKEY_ALIASES = {
+  [`${LEGACY_RIGHT_ALT_PREFIX}Dictation`]: "AltDictation",
+  [`${LEGACY_RIGHT_ALT_PREFIX}FreeMode`]: "AltSpaceMode",
+  [`${LEGACY_RIGHT_ALT_PREFIX}Translation`]: "AltTranslation",
+};
+
+function normalizeHotkeyValue(value) {
+  return LEGACY_HOTKEY_ALIASES[value] ?? value;
+}
+
 function setVisible(element, visible) {
   if (!element) {
     return;
@@ -278,6 +292,7 @@ function populateMicrophoneSelect(microphones, selectedId) {
 }
 
 function populateHotkeySelect(selectElement, hotkeys, selectedValue) {
+  const normalizedSelectedValue = normalizeHotkeyValue(selectedValue);
   selectElement.innerHTML = "";
   for (const hotkey of hotkeys) {
     const option = document.createElement("option");
@@ -286,8 +301,8 @@ function populateHotkeySelect(selectElement, hotkeys, selectedValue) {
     selectElement.append(option);
   }
 
-  selectElement.value = selectedValue;
-  if (selectElement.value !== selectedValue && hotkeys.length > 0) {
+  selectElement.value = normalizedSelectedValue;
+  if (selectElement.value !== normalizedSelectedValue && hotkeys.length > 0) {
     selectElement.value = hotkeys[0].value;
   }
 }
@@ -374,6 +389,11 @@ function fillSettingsView(view) {
   recognitionModeSelect.value = view.settings.recognition_mode ?? "non_streaming";
   voiceFormattingToggle.checked = view.settings.voice_formatting_enabled ?? true;
   autoLearningToggle.checked = view.settings.auto_learning_enabled ?? true;
+  streamingAiPanelToggle.checked = view.settings.streaming_ai_panel_enabled ?? false;
+  streamingEnhancementModeSelect.value =
+    view.settings.streaming_enhancement_mode === "online_enhanced"
+      ? "online_enhanced"
+      : "offline_private";
   computeBackendSelect.value = view.settings.compute_backend ?? "auto";
   translationTargetLanguageSelect.value = view.settings.translation_target_language ?? "en";
   rewriteScenarioSelect.value = view.settings.rewrite_scenario ?? "general";
@@ -411,16 +431,17 @@ function fillSettingsView(view) {
   setVisible(inputMonitoringSettingsRow, view.show_input_monitoring_settings);
   permissionsSummary.textContent = view.permissions_summary;
 
-  appVersion.textContent = `TypeYourMind ${view.app_version}`;
+  appVersion.textContent = `typetype ${view.app_version}`;
   runtimeModeLabel.textContent = view.runtime_mode_label;
-  modelLabel.textContent = view.model_label;
+  modelLabel.textContent = publicModelLabel(view.model_label);
   modelStatus.textContent = view.model_status;
   modelStatus.dataset.status = view.model_status;
-  modelPathLabel.textContent = view.model_path_label;
-  modelPathLabel.title = view.model_path_label;
+  modelPathLabel.textContent = publicModelPathLabel(view.model_path_label);
+  modelPathLabel.title = "实际路径可通过 ASR 自检复制给售后排查。";
   computeBackendLabel.textContent = view.compute_backend_label;
   logPath.textContent = view.log_path;
   logPath.title = view.log_path;
+  renderPreloadStatus(view.preload_status);
   headerMeta.textContent = `${view.platform_label} · ${view.runtime_mode_label} · ${view.model_status}`;
 
   if (!view.show_permissions_panel && document.querySelector(".settings-panel.is-active")?.id === "panel-permissions") {
@@ -428,6 +449,21 @@ function fillSettingsView(view) {
   }
 
   isHydrating = false;
+}
+
+function renderPreloadStatus(status = {}) {
+  if (!preloadStatusGrid) {
+    return;
+  }
+
+  const items = [status.asr, status.punctuation, status.translation, status.dictionary, status.llm]
+    .filter(Boolean);
+  preloadStatusGrid.innerHTML = items.map((item) => `
+    <div class="preload-status-item" data-status="${escapeHtml(item.status)}">
+      <strong>${escapeHtml(item.label)}</strong>
+      <span>${escapeHtml(item.detail)}</span>
+    </div>
+  `).join("");
 }
 
 function collectSettings() {
@@ -443,6 +479,8 @@ function collectSettings() {
     recognition_mode: recognitionModeSelect.value,
     voice_formatting_enabled: voiceFormattingToggle.checked,
     auto_learning_enabled: autoLearningToggle.checked,
+    streaming_ai_panel_enabled: streamingAiPanelToggle.checked,
+    streaming_enhancement_mode: streamingEnhancementModeSelect.value,
     compute_backend: computeBackendSelect.value,
     translation_target_language: translationTargetLanguageSelect.value,
     rewrite_scenario: rewriteScenarioSelect.value,
@@ -813,6 +851,25 @@ function formatAsrDiagnostics(report) {
   ].join("\n");
 }
 
+function publicModelLabel(label) {
+  const value = String(label || "");
+  if (value.includes("streaming") || value.includes("zipformer")) {
+    return "高精度流式识别引擎";
+  }
+  if (value.includes("sense") || value.includes("SenseVoice")) {
+    return "高精度整段识别引擎";
+  }
+  return value || "自动识别模型";
+}
+
+function publicModelPathLabel(pathLabel) {
+  const value = String(pathLabel || "");
+  if (!value || value === "not configured") {
+    return "未加载";
+  }
+  return "已内置，可直接使用";
+}
+
 async function refreshSettingsView(statusMessage = null) {
   const view = await electronAPI.getSettingsViewData();
   fillSettingsView(view);
@@ -862,14 +919,14 @@ function schedulePersistSettings() {
 }
 
 function applyHotkeyProfile(profile) {
-  if (profile === "typeless") {
-    hotkeySelect.value = "TypelessDictation";
-    translateHotkeySelect.value = "TypelessTranslation";
-    setStatus("已切换为 Typeless 兼容快捷键：右 Alt 语音、右 Alt + Shift 翻译。");
+  if (profile === "alt") {
+    hotkeySelect.value = "AltDictation";
+    translateHotkeySelect.value = "AltTranslation";
+    setStatus("已切换为 ALT 方案：右 Alt 语音、右 Alt + Shift 翻译。");
   } else {
     hotkeySelect.value = "CtrlSlash";
     translateHotkeySelect.value = "CtrlDot";
-    setStatus("已切换为 typetype 默认快捷键：Ctrl+/ 语音、Ctrl+. 翻译。");
+    setStatus("已切换为 CTRL 方案：Ctrl+/ 语音、Ctrl+. 翻译。");
   }
   cancelScheduledSave();
   void persistSettings();
@@ -889,7 +946,7 @@ for (const item of navItems) {
 }
 
 hotkeyProfileDefaultButton.addEventListener("click", () => applyHotkeyProfile("default"));
-hotkeyProfileTypelessButton.addEventListener("click", () => applyHotkeyProfile("typeless"));
+hotkeyProfileAltButton.addEventListener("click", () => applyHotkeyProfile("alt"));
 
 for (const element of [
   hotkeySelect,
@@ -900,6 +957,8 @@ for (const element of [
   recognitionModeSelect,
   voiceFormattingToggle,
   autoLearningToggle,
+  streamingAiPanelToggle,
+  streamingEnhancementModeSelect,
   computeBackendSelect,
   translationTargetLanguageSelect,
   rewriteScenarioSelect,

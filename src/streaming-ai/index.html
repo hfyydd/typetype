@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>typetype AI 整理</title>
+    <link rel="stylesheet" href="../shared/base.css" />
+  </head>
+  <body class="streaming-ai-shell">
+    <main class="streaming-ai-layout">
+      <header class="streaming-ai-header">
+        <div>
+          <p class="settings-kicker">流式 AI 整理</p>
+          <h1>AI 修正原文与整理稿</h1>
+        </div>
+        <div class="streaming-ai-actions">
+          <button type="button" class="settings-secondary-button" id="copy-raw-button">复制原文</button>
+          <button type="button" class="settings-secondary-button" id="copy-ai-button">复制整理稿</button>
+          <button type="button" class="settings-secondary-button" id="clear-button">清空本次记录</button>
+        </div>
+      </header>
+
+      <section class="streaming-ai-status" data-tone="" id="status-card">
+        <strong id="status-title">等待录音</strong>
+        <span id="status-text">开启流式输出并打开“流式 AI 整理面板”后，这里会显示实时状态。</span>
+        <em id="status-meta"></em>
+      </section>
+
+      <section class="streaming-ai-columns">
+        <article class="streaming-ai-pane">
+          <div class="streaming-ai-pane-heading">
+            <h2>AI 修正原文</h2>
+            <div class="streaming-ai-inline-actions">
+              <span id="raw-count">0 字</span>
+              <button type="button" class="settings-secondary-button" id="apply-refined-raw-button">一键带入</button>
+            </div>
+          </div>
+          <pre id="raw-text" class="streaming-ai-text empty">等待 AI 修正原文…</pre>
+        </article>
+
+        <article class="streaming-ai-pane">
+          <div class="streaming-ai-pane-heading">
+            <h2>AI 纠错 / 会议纪要草稿</h2>
+            <span id="ai-count">0 字</span>
+          </div>
+          <pre id="ai-text" class="streaming-ai-text empty">检测到停顿后，会在这里生成纠错稿或会议纪要草稿。</pre>
+        </article>
+      </section>
+    </main>
+
+    <script>
+      (() => {
+        const electronAPI = window.electronAPI;
+        const statusCard = document.querySelector("#status-card");
+        const statusTitle = document.querySelector("#status-title");
+        const statusText = document.querySelector("#status-text");
+        const statusMeta = document.querySelector("#status-meta");
+        const rawText = document.querySelector("#raw-text");
+        const aiText = document.querySelector("#ai-text");
+        const rawCount = document.querySelector("#raw-count");
+        const aiCount = document.querySelector("#ai-count");
+        const copyRawButton = document.querySelector("#copy-raw-button");
+        const copyAiButton = document.querySelector("#copy-ai-button");
+        const clearButton = document.querySelector("#clear-button");
+        const applyRefinedRawButton = document.querySelector("#apply-refined-raw-button");
+
+        function statusTitleFor(status) {
+          switch (status) {
+            case "recording":
+              return "正在记录";
+            case "thinking":
+              return "AI 整理中";
+            case "ready":
+              return "整理稿已更新";
+            case "error":
+              return "AI 整理不可用";
+            default:
+              return "等待录音";
+          }
+        }
+
+        function toneFor(status) {
+          if (status === "error") return "error";
+          if (status === "ready" || status === "recording") return "success";
+          if (status === "thinking") return "thinking";
+          return "";
+        }
+
+        function renderText(element, value, placeholder) {
+          const text = value?.trim() ? value : placeholder;
+          element.textContent = text;
+          element.classList.toggle("empty", !value?.trim());
+        }
+
+        function render(state) {
+          statusCard.dataset.tone = toneFor(state.status);
+          statusTitle.textContent = statusTitleFor(state.status);
+          const errorSuffix = state.last_error ? `\n${state.last_error}` : "";
+          statusText.textContent = `${state.status_text || "等待录音。"}${errorSuffix}`;
+          const reviewText = state.last_review_at
+            ? `最近整理：${new Date(state.last_review_at).toLocaleTimeString()}`
+            : "尚未整理";
+          const applyText = state.apply_status_text ? ` · ${state.apply_status_text}` : "";
+          statusMeta.textContent = `${state.mode_label || "流式模式"} · ${state.ai_status_label || "等待"} · ${reviewText}${applyText}`;
+
+          const refinedRaw = state.refined_raw_text?.trim() ? state.refined_raw_text : state.raw_text;
+          renderText(rawText, refinedRaw, "等待 AI 修正原文…");
+          renderText(aiText, state.ai_text, "检测到停顿后，会在这里生成纠错稿或会议纪要草稿。");
+          rawCount.textContent = `${refinedRaw?.length ?? 0} 字`;
+          aiCount.textContent = `${state.ai_text?.length ?? 0} 字`;
+          copyRawButton.disabled = !(refinedRaw?.trim());
+          copyAiButton.disabled = !(state.ai_text?.trim());
+          clearButton.disabled = !(refinedRaw?.trim() || state.ai_text?.trim());
+          applyRefinedRawButton.disabled = !(state.can_apply_refined_raw && refinedRaw?.trim());
+        }
+
+        function renderDisconnected(message) {
+          statusCard.dataset.tone = "error";
+          statusTitle.textContent = "面板未连接";
+          statusText.textContent = message;
+          statusMeta.textContent = "请关闭面板后重新打开，或重启 typetype。";
+        }
+
+        async function callAndRender(action) {
+          try {
+            const state = await action();
+            render(state);
+          } catch (error) {
+            renderDisconnected(error instanceof Error ? error.message : String(error));
+          }
+        }
+
+        if (!electronAPI) {
+          renderDisconnected("没有连接到 typetype 主进程，面板无法接收实时原文。");
+          return;
+        }
+
+        copyRawButton.addEventListener("click", () => {
+          void callAndRender(() => electronAPI.copyStreamingAiRaw());
+        });
+
+        copyAiButton.addEventListener("click", () => {
+          void callAndRender(() => electronAPI.copyStreamingAiSummary());
+        });
+
+        applyRefinedRawButton.addEventListener("click", () => {
+          void callAndRender(() => electronAPI.applyStreamingAiRefinedRaw());
+        });
+
+        clearButton.addEventListener("click", () => {
+          void callAndRender(() => electronAPI.clearStreamingAiPanel());
+        });
+
+        electronAPI.subscribeStreamingAiPanelState(render);
+
+        window.setInterval(() => {
+          void electronAPI.getStreamingAiPanelState()
+            .then(render)
+            .catch((error) => {
+              renderDisconnected(error instanceof Error ? error.message : String(error));
+            });
+        }, 1000);
+      })();
+    </script>
+  </body>
+</html>

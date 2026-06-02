@@ -35,6 +35,8 @@ export class SettingsStore {
       translation_target_language: 'en',
       auto_learning_enabled: true,
       voice_formatting_enabled: true,
+      streaming_ai_panel_enabled: false,
+      streaming_enhancement_mode: 'offline_private',
       rewrite_scenario: 'general',
       custom_dictionary: [],
       model_path: null,

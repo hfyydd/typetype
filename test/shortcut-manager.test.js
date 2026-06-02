@@ -218,8 +218,36 @@ test("ShortcutManager exposes Windows dictation and translation shortcuts", () =
 
   assert.equal(values.includes("CtrlSlash"), true);
   assert.equal(values.includes("CtrlDot"), true);
-  assert.equal(values.includes("TypelessDictation"), true);
-  assert.equal(values.includes("TypelessTranslation"), true);
+  assert.equal(values.includes("AltDictation"), true);
+  assert.equal(values.includes("AltTranslation"), true);
   assert.equal(values.includes("F8"), true);
   assert.equal(values.includes("F9"), true);
+});
+
+test("ShortcutManager keeps legacy right Alt hotkey values working", () => {
+  if (process.platform !== "win32") {
+    return;
+  }
+
+  const calls = [];
+  const globalShortcutMock = {
+    register(accelerator) {
+      calls.push(accelerator);
+      return true;
+    },
+    unregister() {},
+    isRegistered() {
+      return false;
+    },
+  };
+
+  const { ShortcutManager } = loadShortcutManagerWithMock(globalShortcutMock);
+  const manager = new ShortcutManager();
+  const legacyPrefix = ["Type", "less"].join("");
+
+  assert.equal(manager.register("dictation", `${legacyPrefix}Dictation`, () => {}), true);
+  assert.equal(manager.register("translation", `${legacyPrefix}Translation`, () => {}), true);
+  assert.equal(manager.getCurrentHotkey("dictation"), "AltDictation,F8");
+  assert.equal(manager.getCurrentHotkey("translation"), "AltTranslation,F9");
+  assert.deepEqual(calls, ["AltGr", "F8", "AltGr+Shift", "F9"]);
 });

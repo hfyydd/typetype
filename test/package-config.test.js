@@ -13,6 +13,7 @@ test("electron-builder does not package models twice", () => {
   assert.deepEqual(resourcesEntry?.filter, [
     "**/*",
     "!models/**",
+    "!punctuation-models/**",
     "!translation-models/**",
     "!runtimes/**",
   ]);
@@ -25,6 +26,7 @@ test("electron-builder excludes bundled model sample assets from packaged output
   assert.deepEqual(resourcesEntry?.filter, [
     "**/*",
     "!models/**",
+    "!punctuation-models/**",
     "!translation-models/**",
     "!runtimes/**",
   ]);
@@ -48,9 +50,19 @@ test("electron-builder packages bundled translation runtimes as extra resources"
   });
 });
 
-test("package metadata keeps the typetype app id while showing the TypeYourMind product name", () => {
+test("electron-builder packages offline punctuation model as extra resources", () => {
+  const punctuationEntry = pkg.build.extraResources.find((entry) => entry?.from === "resources/punctuation-models");
+
+  assert.deepEqual(punctuationEntry, {
+    from: "resources/punctuation-models",
+    to: "punctuation-models",
+    filter: ["**/*"],
+  });
+});
+
+test("package metadata keeps the typetype app id and product name", () => {
   assert.equal(pkg.name, "typetype");
-  assert.equal(pkg.build.productName, "TypeYourMind");
+  assert.equal(pkg.build.productName, "typetype");
   assert.equal(pkg.build.appId, "app.typetype");
 });
 
@@ -64,6 +76,7 @@ test("windows packaging unpacks native sherpa runtime files", () => {
   assert.deepEqual(pkg.build.asarUnpack, [
     "node_modules/sherpa-onnx-node/**/*",
     "node_modules/sherpa-onnx-win-x64/**/*",
+    "node_modules/onnxruntime-node/**/*",
   ]);
 });
 
