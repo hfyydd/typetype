@@ -46,6 +46,213 @@ body {
   padding: 0;
 }
 
+.streaming-ai-shell {
+  min-height: 100vh;
+  background: #f4f5f6;
+  color: var(--text);
+}
+
+.streaming-ai-layout {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 10px;
+  padding: 14px;
+}
+
+.streaming-ai-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.streaming-ai-header h1 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.15;
+}
+
+.streaming-ai-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.streaming-ai-status {
+  border: 1px solid rgba(24, 33, 43, 0.1);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px 12px;
+  display: grid;
+  gap: 3px;
+}
+
+.streaming-ai-status strong {
+  font-size: 14px;
+}
+
+.streaming-ai-status span {
+  white-space: pre-wrap;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.streaming-ai-status em {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+}
+
+.streaming-ai-status[data-tone="success"] {
+  border-color: rgba(15, 118, 110, 0.28);
+  background: #f2fbf9;
+}
+
+.streaming-ai-status[data-tone="thinking"] {
+  border-color: rgba(168, 118, 0, 0.28);
+  background: #fffaf0;
+}
+
+.streaming-ai-status[data-tone="error"] {
+  border-color: rgba(180, 35, 24, 0.28);
+  background: #fff7f6;
+}
+
+.streaming-ai-status[data-tone="error"] span {
+  color: var(--danger);
+}
+
+.streaming-ai-columns {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
+.streaming-ai-pane {
+  min-width: 0;
+  min-height: 0;
+  border: 1px solid rgba(24, 33, 43, 0.1);
+  border-radius: 8px;
+  background: #ffffff;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.streaming-ai-pane-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(24, 33, 43, 0.08);
+}
+
+.streaming-ai-pane-heading h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.streaming-ai-pane-heading span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.streaming-ai-inline-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.streaming-ai-inline-actions .settings-secondary-button {
+  min-height: 30px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.streaming-ai-text {
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.streaming-ai-text.empty {
+  color: var(--muted);
+}
+
+.preload-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.preload-status-item {
+  border: 1px solid rgba(24, 33, 43, 0.1);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 10px 12px;
+  display: grid;
+  gap: 3px;
+}
+
+.preload-status-item strong {
+  font-size: 13px;
+}
+
+.preload-status-item span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.preload-status-item[data-status="ready"],
+.preload-status-item[data-status="configured"] {
+  border-color: rgba(15, 118, 110, 0.24);
+  background: #f2fbf9;
+}
+
+.preload-status-item[data-status="warming"] {
+  border-color: rgba(168, 118, 0, 0.24);
+  background: #fffaf0;
+}
+
+.preload-status-item[data-status="error"] {
+  border-color: rgba(180, 35, 24, 0.24);
+  background: #fff7f6;
+}
+
+.preload-status-item[data-status="error"] span {
+  color: var(--danger);
+}
+
+@media (max-width: 860px) {
+  .streaming-ai-header,
+  .streaming-ai-columns {
+    grid-template-columns: 1fr;
+    display: grid;
+  }
+
+  .streaming-ai-actions {
+    justify-content: flex-start;
+  }
+
+  .preload-status-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .card {
   width: 100%;
   max-width: 460px;
@@ -725,6 +932,7 @@ p {
 }
 
 .hud {
+  -webkit-app-region: drag;
   width: auto;
   min-width: 126px;
   max-width: 146px;
@@ -746,6 +954,8 @@ p {
     border-radius 155ms cubic-bezier(0.22, 1, 0.36, 1);
   position: relative;
   overflow: hidden;
+  cursor: move;
+  user-select: none;
 }
 
 .hud::before {
@@ -934,6 +1144,8 @@ p {
 
 .settings-inline-actions {
   display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
   justify-content: flex-end;
 }
 

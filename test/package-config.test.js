@@ -13,6 +13,7 @@ test("electron-builder does not package models twice", () => {
   assert.deepEqual(resourcesEntry?.filter, [
     "**/*",
     "!models/**",
+    "!punctuation-models/**",
     "!translation-models/**",
     "!runtimes/**",
   ]);
@@ -25,6 +26,7 @@ test("electron-builder excludes bundled model sample assets from packaged output
   assert.deepEqual(resourcesEntry?.filter, [
     "**/*",
     "!models/**",
+    "!punctuation-models/**",
     "!translation-models/**",
     "!runtimes/**",
   ]);
@@ -48,7 +50,17 @@ test("electron-builder packages bundled translation runtimes as extra resources"
   });
 });
 
-test("package metadata uses the typetype app name", () => {
+test("electron-builder packages offline punctuation model as extra resources", () => {
+  const punctuationEntry = pkg.build.extraResources.find((entry) => entry?.from === "resources/punctuation-models");
+
+  assert.deepEqual(punctuationEntry, {
+    from: "resources/punctuation-models",
+    to: "punctuation-models",
+    filter: ["**/*"],
+  });
+});
+
+test("package metadata keeps the typetype app id and product name", () => {
   assert.equal(pkg.name, "typetype");
   assert.equal(pkg.build.productName, "typetype");
   assert.equal(pkg.build.appId, "app.typetype");
@@ -56,25 +68,27 @@ test("package metadata uses the typetype app name", () => {
 
 test("package uses the native sherpa node addon instead of the wasm package", () => {
   assert.equal(pkg.dependencies["sherpa-onnx-node"] !== undefined, true);
-  // Windows support removed
-    // assert.equal(pkg.dependencies["sherpa-onnx-win-x64"] !== undefined, true);
+  assert.equal(pkg.dependencies["sherpa-onnx-win-x64"] !== undefined, true);
   assert.equal(pkg.dependencies["sherpa-onnx"] === undefined, true);
 });
 
-// Windows support removed
 test("windows packaging unpacks native sherpa runtime files", () => {
   assert.deepEqual(pkg.build.asarUnpack, [
     "node_modules/sherpa-onnx-node/**/*",
+    "node_modules/sherpa-onnx-win-x64/**/*",
+    "node_modules/onnxruntime-node/**/*",
   ]);
 });
 
-// Windows support removed
 test("windows packaging explicitly includes ffmpeg.dll beside the executable", () => {
-  // no win config
-  assert.equal(pkg.build.win, undefined);
+  const ffmpegEntry = pkg.build.win?.extraFiles?.find((entry) => entry?.from === "node_modules/electron/dist/ffmpeg.dll");
+
+  assert.deepEqual(ffmpegEntry, {
+    from: "node_modules/electron/dist/ffmpeg.dll",
+    to: ".",
+  });
 });
 
-// Windows support removed
 test("windows packaging keeps only Chinese and English Electron locales", () => {
-  assert.equal(pkg.build.win, undefined);
+  assert.deepEqual(pkg.build.win?.electronLanguages, ["zh-CN", "en-US"]);
 });

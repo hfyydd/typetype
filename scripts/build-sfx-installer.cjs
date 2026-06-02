@@ -2,14 +2,18 @@ const fs = require("fs");
 const path = require("path");
 const { spawnSync } = require("child_process");
 const { NtExecutable, NtExecutableResource, Resource, Data } = require("resedit");
+const pkg = require("../package.json");
 
 const rootDir = path.resolve(__dirname, "..");
 const releaseDir = path.join(rootDir, "release");
 const appDir = path.join(releaseDir, "win-unpacked");
-const archivePath = path.join(releaseDir, "typetype-customer.7z");
-const sfxConfigPath = path.join(releaseDir, "typetype-sfx-config.txt");
-const patchedSfxPath = path.join(releaseDir, "typetype-7z.sfx");
-const installerPath = path.join(releaseDir, "typetype-customer-installer.exe");
+const productName = pkg.build?.productName || pkg.name || "typetype";
+const safeProductName = productName.replace(/[\\/:*?"<>|]/g, "-");
+const executableName = `${safeProductName}.exe`;
+const archivePath = path.join(releaseDir, `${safeProductName}-customer.7z`);
+const sfxConfigPath = path.join(releaseDir, `${safeProductName}-sfx-config.txt`);
+const patchedSfxPath = path.join(releaseDir, `${safeProductName}-7z.sfx`);
+const installerPath = path.join(releaseDir, `${safeProductName}-customer-installer.exe`);
 
 const sevenZipPath = "C:\\Program Files\\7-Zip\\7z.exe";
 const sfxPath = "C:\\Program Files\\7-Zip\\7z.sfx";
@@ -24,7 +28,7 @@ try {
 
 function main() {
   assertExists(appDir, "win-unpacked application directory");
-  assertExists(path.join(appDir, "typetype.exe"), "typetype executable");
+  assertExists(path.join(appDir, executableName), `${productName} executable`);
   assertExists(sevenZipPath, "7-Zip executable");
   assertExists(sfxPath, "7-Zip SFX module");
   assertExists(iconPath, "application icon");
@@ -41,9 +45,9 @@ function main() {
     sfxConfigPath,
     [
       ";!@Install@!UTF-8!",
-      'Title="typetype 安装"',
-      'BeginPrompt="即将安装 typetype 到当前用户目录，并创建桌面快捷方式。"',
-      'InstallPath="%LocalAppData%\\\\Programs\\\\typetype"',
+      `Title="${productName} 安装"`,
+      `BeginPrompt="即将安装 ${productName} 到当前用户目录，并创建桌面快捷方式。"`,
+      `InstallPath="%LocalAppData%\\\\Programs\\\\${safeProductName}"`,
       'OverwriteMode="2"',
       'RunProgram="powershell.exe -NoProfile -ExecutionPolicy Bypass -File install.ps1"',
       ";!@InstallEnd@!",
@@ -64,27 +68,27 @@ function writeInstallHelpers() {
     path.join(appDir, "install.ps1"),
     String.raw`$ErrorActionPreference = 'SilentlyContinue'
 $installDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$exePath = Join-Path $installDir 'typetype.exe'
+$exePath = Join-Path $installDir '${executableName}'
 $desktopDir = [Environment]::GetFolderPath('DesktopDirectory')
 $programsDir = [Environment]::GetFolderPath('Programs')
-$startMenuDir = Join-Path $programsDir 'typetype'
+$startMenuDir = Join-Path $programsDir '${safeProductName}'
 New-Item -ItemType Directory -Force -Path $startMenuDir | Out-Null
 
 $shell = New-Object -ComObject WScript.Shell
 
-$desktopShortcut = $shell.CreateShortcut((Join-Path $desktopDir 'typetype.lnk'))
+$desktopShortcut = $shell.CreateShortcut((Join-Path $desktopDir '${safeProductName}.lnk'))
 $desktopShortcut.TargetPath = $exePath
 $desktopShortcut.WorkingDirectory = $installDir
 $desktopShortcut.IconLocation = "$exePath,0"
 $desktopShortcut.Save()
 
-$startShortcut = $shell.CreateShortcut((Join-Path $startMenuDir 'typetype.lnk'))
+$startShortcut = $shell.CreateShortcut((Join-Path $startMenuDir '${safeProductName}.lnk'))
 $startShortcut.TargetPath = $exePath
 $startShortcut.WorkingDirectory = $installDir
 $startShortcut.IconLocation = "$exePath,0"
 $startShortcut.Save()
 
-$uninstallShortcut = $shell.CreateShortcut((Join-Path $startMenuDir '卸载 typetype.lnk'))
+$uninstallShortcut = $shell.CreateShortcut((Join-Path $startMenuDir '卸载 ${safeProductName}.lnk'))
 $uninstallShortcut.TargetPath = 'powershell.exe'
 $uninstallShortcut.Arguments = '-NoProfile -ExecutionPolicy Bypass -File "' + $installDir + '\uninstall.ps1"'
 $uninstallShortcut.WorkingDirectory = $installDir
@@ -100,9 +104,9 @@ Start-Process -FilePath $exePath -WorkingDirectory $installDir
     path.join(appDir, "uninstall.ps1"),
     String.raw`$ErrorActionPreference = 'SilentlyContinue'
 $installDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-Stop-Process -Name 'typetype' -Force
-Remove-Item -LiteralPath (Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) 'typetype.lnk') -Force
-Remove-Item -LiteralPath (Join-Path ([Environment]::GetFolderPath('Programs')) 'typetype') -Recurse -Force
+Stop-Process -Name '${safeProductName}' -Force
+Remove-Item -LiteralPath (Join-Path ([Environment]::GetFolderPath('DesktopDirectory')) '${safeProductName}.lnk') -Force
+Remove-Item -LiteralPath (Join-Path ([Environment]::GetFolderPath('Programs')) '${safeProductName}') -Recurse -Force
 $cmd = '/c timeout /t 1 >nul & rmdir /s /q "' + $installDir + '"'
 Start-Process -FilePath 'cmd.exe' -ArgumentList $cmd -WindowStyle Hidden
 `,

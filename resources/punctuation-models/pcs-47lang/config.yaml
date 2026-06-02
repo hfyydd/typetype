@@ -1,0 +1,34 @@
+
+languages:  [
+  "af", "am", "ar", "bg", "bn", "de", "el", "en", "es", "et",
+  "fa", "fi", "fr", "gu", "hi", "hr", "hu", "id", "is", "it",
+  "ja", "kk", "kn", "ko", "ky", "lt", "lv", "mk", "ml", "mr",
+  "nl", "or", "pa", "pl", "ps", "pt", "ro", "ru", "rw", "so",
+  "sr", "sw", "ta", "te", "tr", "uk", "zh"
+]
+
+max_length: 128
+
+pre_labels: [
+  "<NULL>",
+  "¿",
+]
+
+post_labels: [
+  "<NULL>",
+  ".",
+  ",",
+  "?",
+  "？",
+  "，",
+  "。",
+  "、",
+  "・",
+  "।",
+  "؟",
+  "،",
+  ";",
+  "።",
+  "፣",
+  "፧",
+]

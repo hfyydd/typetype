@@ -7,11 +7,15 @@ const panels = Array.from(document.querySelectorAll(".settings-panel"));
 const microphoneSelect = document.querySelector("#microphone_id");
 const hotkeySelect = document.querySelector("#hotkey");
 const translateHotkeySelect = document.querySelector("#translate_hotkey");
+const hotkeyProfileDefaultButton = document.querySelector("#hotkey-profile-default");
+const hotkeyProfileAltButton = document.querySelector("#hotkey-profile-alt");
 const autoPasteToggle = document.querySelector("#auto_paste");
 const launchAtLoginToggle = document.querySelector("#launch_at_login");
 const recognitionModeSelect = document.querySelector("#recognition_mode");
 const voiceFormattingToggle = document.querySelector("#voice_formatting_enabled");
 const autoLearningToggle = document.querySelector("#auto_learning_enabled");
+const streamingAiPanelToggle = document.querySelector("#streaming_ai_panel_enabled");
+const streamingEnhancementModeSelect = document.querySelector("#streaming_enhancement_mode");
 const computeBackendSelect = document.querySelector("#compute_backend");
 const translationTargetLanguageSelect = document.querySelector("#translation_target_language");
 const rewriteScenarioSelect = document.querySelector("#rewrite_scenario");
@@ -75,6 +79,7 @@ const modelPathLabel = document.querySelector("#model-path-label");
 const computeBackendLabel = document.querySelector("#compute-backend-label");
 const logPath = document.querySelector("#log-path");
 const asrDiagnosticsOutput = document.querySelector("#asr-diagnostics-output");
+const preloadStatusGrid = document.querySelector("#preload-status-grid");
 
 let currentSettings = null;
 let isHydrating = false;
@@ -90,12 +95,12 @@ const TEXT_INPUT_SAVE_DELAY_MS = 450;
 
 const LLM_PROVIDER_PRESETS = {
   openai: {
-    label: "OpenAI GPT",
+    label: "OpenAI GPT（快速推荐）",
     provider: "openai",
     base_url: "https://api.openai.com/v1",
-    model: "gpt-5.5",
+    model: "gpt-5.1",
     temperature: 0.3,
-    apiKeyHelp: "请填写 OpenAI Platform API Key；ChatGPT Plus/Pro 订阅不等于 API 免费额度。获取地址：https://platform.openai.com/api-keys",
+    apiKeyHelp: "请填写 OpenAI Platform API Key；ChatGPT Plus/Pro 订阅不等于 API 免费额度。默认使用适合语音润写的快速模型，可手动改成更高质量模型。获取地址：https://platform.openai.com/api-keys",
     placeholder: "粘贴 OpenAI Platform API Key",
   },
   minimax_cn: {
@@ -156,28 +161,64 @@ const LLM_PROVIDER_PRESETS = {
     label: "智谱 GLM",
     provider: "compatible",
     base_url: "https://open.bigmodel.cn/api/paas/v4",
-    model: "glm-5.1",
+    model: "glm-4.7-flash",
     temperature: 0.3,
-    apiKeyHelp: "请填写智谱开放平台 API Key，不要填写 OpenAI 或其他平台的 Key。",
+    apiKeyHelp: "请填写智谱开放平台 API Key，不要填写 OpenAI 或其他平台的 Key。默认使用 Flash 快速模型，适合语音润写。",
     placeholder: "粘贴智谱 API Key",
   },
   kimi_cn: {
     label: "Kimi / 月之暗面国内版",
     provider: "compatible",
     base_url: "https://api.moonshot.cn/v1",
-    model: "kimi-k2.5",
+    model: "moonshot-v1-8k",
     temperature: 1,
-    apiKeyHelp: "请填写 Kimi 国内开放平台 API Key；国内 Key 应使用 api.moonshot.cn。401 通常表示 Key 填错、平台不匹配、复制不完整或权限/额度不可用。",
+    apiKeyHelp: "请填写 Kimi 国内开放平台 API Key；国内 Key 应使用 api.moonshot.cn。默认使用更快的 moonshot-v1-8k，想要更强效果可手动改为平台可用的 Kimi 模型。",
     placeholder: "粘贴 Kimi 国内 API Key",
   },
   kimi_intl: {
     label: "Kimi 国际版",
     provider: "compatible",
     base_url: "https://api.moonshot.ai/v1",
-    model: "kimi-k2.6",
+    model: "moonshot-v1-8k",
     temperature: 1,
-    apiKeyHelp: "请填写 Kimi 国际平台 API Key；国际 Key 应使用 api.moonshot.ai。401 通常表示 Key 填错、平台不匹配、复制不完整或权限/额度不可用。",
+    apiKeyHelp: "请填写 Kimi 国际平台 API Key；国际 Key 应使用 api.moonshot.ai。默认使用更快的 moonshot-v1-8k，想要更强效果可手动改为平台可用的 Kimi 模型。",
     placeholder: "粘贴 Kimi 国际 API Key",
+  },
+  siliconflow: {
+    label: "硅基流动",
+    provider: "compatible",
+    base_url: "https://api.siliconflow.cn/v1",
+    model: "zai-org/GLM-4.7-Flash",
+    temperature: 0.3,
+    apiKeyHelp: "请填写硅基流动 API Key。默认使用轻量快速模型；如账号模型名不同，可在硅基流动模型列表复制可用模型名。",
+    placeholder: "粘贴硅基流动 API Key",
+  },
+  baidu_cn: {
+    label: "百度千帆国内版",
+    provider: "compatible",
+    base_url: "https://qianfan.baidubce.com/v2",
+    model: "ernie-speed-pro-128k",
+    temperature: 0.3,
+    apiKeyHelp: "请填写百度千帆国内平台 API Key。默认使用 ERNIE Speed 快速模型，适合语音润写。",
+    placeholder: "粘贴百度千帆国内 API Key",
+  },
+  baidu_intl: {
+    label: "百度千帆国际版",
+    provider: "compatible",
+    base_url: "https://api.baiduqianfan.ai/v1",
+    model: "ernie-speed-pro-128k",
+    temperature: 0.3,
+    apiKeyHelp: "请填写百度千帆国际平台 API Key。国内和国际 Key 不要混用。",
+    placeholder: "粘贴百度千帆国际 API Key",
+  },
+  gemini: {
+    label: "Google Gemini",
+    provider: "compatible",
+    base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+    model: "gemini-2.5-flash",
+    temperature: 0.3,
+    apiKeyHelp: "请填写 Google AI Studio 生成的 Gemini API Key。默认使用 Gemini Flash 快速模型。",
+    placeholder: "粘贴 Gemini API Key",
   },
   baichuan: {
     label: "百川智能",
@@ -198,6 +239,17 @@ const LLM_PROVIDER_PRESETS = {
     placeholder: "粘贴豆包 API Key",
   },
 };
+
+const LEGACY_RIGHT_ALT_PREFIX = ["Type", "less"].join("");
+const LEGACY_HOTKEY_ALIASES = {
+  [`${LEGACY_RIGHT_ALT_PREFIX}Dictation`]: "AltDictation",
+  [`${LEGACY_RIGHT_ALT_PREFIX}FreeMode`]: "AltSpaceMode",
+  [`${LEGACY_RIGHT_ALT_PREFIX}Translation`]: "AltTranslation",
+};
+
+function normalizeHotkeyValue(value) {
+  return LEGACY_HOTKEY_ALIASES[value] ?? value;
+}
 
 function setVisible(element, visible) {
   if (!element) {
@@ -240,6 +292,7 @@ function populateMicrophoneSelect(microphones, selectedId) {
 }
 
 function populateHotkeySelect(selectElement, hotkeys, selectedValue) {
+  const normalizedSelectedValue = normalizeHotkeyValue(selectedValue);
   selectElement.innerHTML = "";
   for (const hotkey of hotkeys) {
     const option = document.createElement("option");
@@ -248,8 +301,8 @@ function populateHotkeySelect(selectElement, hotkeys, selectedValue) {
     selectElement.append(option);
   }
 
-  selectElement.value = selectedValue;
-  if (selectElement.value !== selectedValue && hotkeys.length > 0) {
+  selectElement.value = normalizedSelectedValue;
+  if (selectElement.value !== normalizedSelectedValue && hotkeys.length > 0) {
     selectElement.value = hotkeys[0].value;
   }
 }
@@ -276,6 +329,11 @@ function inferLlmPresetKey(rewrite = {}) {
     ["kimi_cn", () => baseUrl.includes("moonshot.cn")],
     ["kimi_intl", () => baseUrl.includes("moonshot.ai")],
     ["kimi_cn", () => model.includes("kimi")],
+    ["siliconflow", () => baseUrl.includes("siliconflow")],
+    ["baidu_cn", () => baseUrl.includes("qianfan.baidubce.com")],
+    ["baidu_intl", () => baseUrl.includes("baiduqianfan.ai")],
+    ["baidu_cn", () => model.includes("ernie")],
+    ["gemini", () => baseUrl.includes("generativelanguage.googleapis.com") || model.includes("gemini")],
     ["baichuan", () => baseUrl.includes("baichuan-ai.com") || model.includes("baichuan")],
     ["doubao", () => baseUrl.includes("volces.com") || model.includes("doubao")],
     ["openai", () => provider === "openai" || baseUrl.includes("api.openai.com") || /^gpt[-\w.]*|^o\d/.test(model)],
@@ -331,6 +389,11 @@ function fillSettingsView(view) {
   recognitionModeSelect.value = view.settings.recognition_mode ?? "non_streaming";
   voiceFormattingToggle.checked = view.settings.voice_formatting_enabled ?? true;
   autoLearningToggle.checked = view.settings.auto_learning_enabled ?? true;
+  streamingAiPanelToggle.checked = view.settings.streaming_ai_panel_enabled ?? false;
+  streamingEnhancementModeSelect.value =
+    view.settings.streaming_enhancement_mode === "online_enhanced"
+      ? "online_enhanced"
+      : "offline_private";
   computeBackendSelect.value = view.settings.compute_backend ?? "auto";
   translationTargetLanguageSelect.value = view.settings.translation_target_language ?? "en";
   rewriteScenarioSelect.value = view.settings.rewrite_scenario ?? "general";
@@ -344,7 +407,7 @@ function fillSettingsView(view) {
     provider: savedLlmRewrite.provider ?? "openai",
     base_url: savedLlmRewrite.base_url ?? "https://api.openai.com/v1",
     api_key: savedLlmRewrite.api_key ?? "",
-    model: savedLlmRewrite.model ?? "gpt-5.5",
+    model: savedLlmRewrite.model ?? "gpt-5.1",
   };
   const llmProviderValue = inferLlmPresetKey(llmRewrite);
   llmEnabledToggle.checked = llmRewrite.enabled ?? false;
@@ -370,14 +433,15 @@ function fillSettingsView(view) {
 
   appVersion.textContent = `typetype ${view.app_version}`;
   runtimeModeLabel.textContent = view.runtime_mode_label;
-  modelLabel.textContent = view.model_label;
+  modelLabel.textContent = publicModelLabel(view.model_label);
   modelStatus.textContent = view.model_status;
   modelStatus.dataset.status = view.model_status;
-  modelPathLabel.textContent = view.model_path_label;
-  modelPathLabel.title = view.model_path_label;
+  modelPathLabel.textContent = publicModelPathLabel(view.model_path_label);
+  modelPathLabel.title = "实际路径可通过 ASR 自检复制给售后排查。";
   computeBackendLabel.textContent = view.compute_backend_label;
   logPath.textContent = view.log_path;
   logPath.title = view.log_path;
+  renderPreloadStatus(view.preload_status);
   headerMeta.textContent = `${view.platform_label} · ${view.runtime_mode_label} · ${view.model_status}`;
 
   if (!view.show_permissions_panel && document.querySelector(".settings-panel.is-active")?.id === "panel-permissions") {
@@ -385,6 +449,21 @@ function fillSettingsView(view) {
   }
 
   isHydrating = false;
+}
+
+function renderPreloadStatus(status = {}) {
+  if (!preloadStatusGrid) {
+    return;
+  }
+
+  const items = [status.asr, status.punctuation, status.translation, status.dictionary, status.llm]
+    .filter(Boolean);
+  preloadStatusGrid.innerHTML = items.map((item) => `
+    <div class="preload-status-item" data-status="${escapeHtml(item.status)}">
+      <strong>${escapeHtml(item.label)}</strong>
+      <span>${escapeHtml(item.detail)}</span>
+    </div>
+  `).join("");
 }
 
 function collectSettings() {
@@ -400,6 +479,8 @@ function collectSettings() {
     recognition_mode: recognitionModeSelect.value,
     voice_formatting_enabled: voiceFormattingToggle.checked,
     auto_learning_enabled: autoLearningToggle.checked,
+    streaming_ai_panel_enabled: streamingAiPanelToggle.checked,
+    streaming_enhancement_mode: streamingEnhancementModeSelect.value,
     compute_backend: computeBackendSelect.value,
     translation_target_language: translationTargetLanguageSelect.value,
     rewrite_scenario: rewriteScenarioSelect.value,
@@ -770,6 +851,25 @@ function formatAsrDiagnostics(report) {
   ].join("\n");
 }
 
+function publicModelLabel(label) {
+  const value = String(label || "");
+  if (value.includes("streaming") || value.includes("zipformer")) {
+    return "高精度流式识别引擎";
+  }
+  if (value.includes("sense") || value.includes("SenseVoice")) {
+    return "高精度整段识别引擎";
+  }
+  return value || "自动识别模型";
+}
+
+function publicModelPathLabel(pathLabel) {
+  const value = String(pathLabel || "");
+  if (!value || value === "not configured") {
+    return "未加载";
+  }
+  return "已内置，可直接使用";
+}
+
 async function refreshSettingsView(statusMessage = null) {
   const view = await electronAPI.getSettingsViewData();
   fillSettingsView(view);
@@ -818,6 +918,20 @@ function schedulePersistSettings() {
   }, TEXT_INPUT_SAVE_DELAY_MS);
 }
 
+function applyHotkeyProfile(profile) {
+  if (profile === "alt") {
+    hotkeySelect.value = "AltDictation";
+    translateHotkeySelect.value = "AltTranslation";
+    setStatus("已切换为 ALT 方案：右 Alt 语音、右 Alt + Shift 翻译。");
+  } else {
+    hotkeySelect.value = "CtrlSlash";
+    translateHotkeySelect.value = "CtrlDot";
+    setStatus("已切换为 CTRL 方案：Ctrl+/ 语音、Ctrl+. 翻译。");
+  }
+  cancelScheduledSave();
+  void persistSettings();
+}
+
 async function runAction(command, successMessage, failureMessage = "请求没有成功。已写入本地日志。") {
   try {
     await electronAPI[command]();
@@ -831,6 +945,9 @@ for (const item of navItems) {
   item.addEventListener("click", () => activatePanel(item.dataset.panelTarget));
 }
 
+hotkeyProfileDefaultButton.addEventListener("click", () => applyHotkeyProfile("default"));
+hotkeyProfileAltButton.addEventListener("click", () => applyHotkeyProfile("alt"));
+
 for (const element of [
   hotkeySelect,
   translateHotkeySelect,
@@ -840,6 +957,8 @@ for (const element of [
   recognitionModeSelect,
   voiceFormattingToggle,
   autoLearningToggle,
+  streamingAiPanelToggle,
+  streamingEnhancementModeSelect,
   computeBackendSelect,
   translationTargetLanguageSelect,
   rewriteScenarioSelect,
@@ -887,8 +1006,16 @@ llmTestButton.addEventListener("click", async () => {
     const config = collectLlmRewriteConfig();
     const result = await electronAPI.testLlmConnection(config);
     if (result.ok) {
-      llmTestStatus.textContent = `连接成功 (${result.latency_ms}ms)`;
-      llmTestStatus.dataset.tone = "default";
+      if (result.latency_ms >= 8000) {
+        llmTestStatus.textContent = `连接成功但偏慢 (${result.latency_ms}ms)，建议换快速模型或检查网络/代理。`;
+        llmTestStatus.dataset.tone = "warning";
+      } else if (result.latency_ms >= 4000) {
+        llmTestStatus.textContent = `连接成功，速度一般 (${result.latency_ms}ms)。`;
+        llmTestStatus.dataset.tone = "warning";
+      } else {
+        llmTestStatus.textContent = `连接成功 (${result.latency_ms}ms)`;
+        llmTestStatus.dataset.tone = "default";
+      }
     } else {
       llmTestStatus.textContent = `失败: ${result.error}`;
       llmTestStatus.dataset.tone = "error";

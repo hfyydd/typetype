@@ -18,7 +18,7 @@ export interface InitializeAsrEngineOptions {
 }
 
 const SENSE_VOICE_MODEL_DIR = 'sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09';
-const STREAMING_MODEL_DIR = 'sherpa-onnx-streaming-zipformer-small-ctc-zh-int8-2025-04-01';
+const STREAMING_XLARGE_MODEL_DIR = 'sherpa-onnx-streaming-zipformer-ctc-zh-xlarge-int8-2025-06-30';
 
 const MODEL_DOWNLOAD_URLS = {
   'sherpa-onnx-sense-voice': {
@@ -26,10 +26,10 @@ const MODEL_DOWNLOAD_URLS = {
     archiveName: `${SENSE_VOICE_MODEL_DIR}.tar.bz2`,
     modelDirName: SENSE_VOICE_MODEL_DIR,
   },
-  'sherpa-onnx-streaming-zipformer-small-ctc-zh': {
-    url: `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/${STREAMING_MODEL_DIR}.tar.bz2`,
-    archiveName: `${STREAMING_MODEL_DIR}.tar.bz2`,
-    modelDirName: STREAMING_MODEL_DIR,
+  'sherpa-onnx-streaming-zipformer-ctc-zh-xlarge': {
+    url: `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/${STREAMING_XLARGE_MODEL_DIR}.tar.bz2`,
+    archiveName: `${STREAMING_XLARGE_MODEL_DIR}.tar.bz2`,
+    modelDirName: STREAMING_XLARGE_MODEL_DIR,
   },
 };
 
@@ -260,14 +260,21 @@ export async function initializeAsrEngine({
         dataDir,
         processResourcesPath,
         appPath,
+        settings,
       }),
       settings
     );
     if (engine) return engine;
 
-    const downloadedPath = await downloadModel('sherpa-onnx-streaming-zipformer-small-ctc-zh', dataDir);
-    if (downloadedPath) {
-      return tryCreateEngine([downloadedPath], settings);
+    const downloadCandidates = ['sherpa-onnx-streaming-zipformer-ctc-zh-xlarge'];
+    for (const candidate of downloadCandidates) {
+      const downloadedPath = await downloadModel(candidate, dataDir);
+      if (downloadedPath) {
+        const downloadedEngine = await tryCreateEngine([downloadedPath], settings);
+        if (downloadedEngine) {
+          return downloadedEngine;
+        }
+      }
     }
     return null;
   }
@@ -319,20 +326,22 @@ function getStreamingModelSearchPaths({
   dataDir,
   processResourcesPath,
   appPath,
+  settings,
 }: {
   dataDir: string;
   processResourcesPath: string;
   appPath: string;
+  settings: Settings;
 }): string[] {
+  const modelDirs = [STREAMING_XLARGE_MODEL_DIR];
+
   return [
-    pathJoin(dataDir, 'models', 'sherpa-onnx-streaming-zipformer-small-ctc-zh-int8-2025-04-01'),
-    pathJoin(processResourcesPath, 'models', 'sherpa-onnx-streaming-zipformer-small-ctc-zh-int8-2025-04-01'),
-    pathJoin(appPath, 'resources', 'models', 'sherpa-onnx-streaming-zipformer-small-ctc-zh-int8-2025-04-01'),
-    ...getModelSearchPaths({
-      dataDir,
-      processResourcesPath,
-      appPath,
-    }),
+    ...modelDirs.flatMap((modelDir) => [
+      pathJoin(dataDir, 'models', modelDir),
+      pathJoin(processResourcesPath, 'models', modelDir),
+      pathJoin(appPath, 'resources', 'models', modelDir),
+    ]),
+    ...getModelSearchPaths({ dataDir, processResourcesPath, appPath }),
   ];
 }
 

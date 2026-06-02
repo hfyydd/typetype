@@ -21,7 +21,7 @@ test("findModelPath keeps streaming and offline model directories separate", (t)
 
   const streamingDir = path.join(
     root,
-    "sherpa-onnx-streaming-zipformer-small-ctc-zh-int8"
+    "sherpa-onnx-streaming-zipformer-ctc-zh-xlarge-int8"
   );
   const offlineDir = path.join(
     root,
@@ -31,7 +31,7 @@ test("findModelPath keeps streaming and offline model directories separate", (t)
   fs.mkdirSync(streamingDir, { recursive: true });
   fs.writeFileSync(path.join(streamingDir, "model.int8.onnx"), "");
   fs.writeFileSync(path.join(streamingDir, "tokens.txt"), "");
-  fs.writeFileSync(path.join(streamingDir, "bbpe.model"), "");
+  fs.writeFileSync(path.join(streamingDir, "bpe.model"), "");
 
   fs.mkdirSync(offlineDir, { recursive: true });
   fs.writeFileSync(path.join(offlineDir, "model.int8.onnx"), "");
@@ -45,5 +45,5 @@ test("findModelPath keeps streaming and offline model directories separate", (t)
   const streamingModel = AsrEngine.findModelPath([root], "streaming_output");
   assert.ok(streamingModel);
   assert.match(streamingModel.modelPath, /streaming-zipformer/);
-  assert.equal(path.basename(streamingModel.bpeVocabPath), "bbpe.model");
+  assert.equal(path.basename(streamingModel.bpeVocabPath), "bpe.model");
 });

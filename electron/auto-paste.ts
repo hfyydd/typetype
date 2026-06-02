@@ -26,6 +26,39 @@ export function createWindowsPasteScript(): string {
   `;
 }
 
+export function createWindowsReplaceRecentTextScript(charCount: number): string {
+  const safeCharCount = Math.max(0, Math.min(Math.floor(charCount), 20000));
+  return `
+    Add-Type -TypeDefinition @"
+    using System;
+    using System.Runtime.InteropServices;
+    public class KeySim {
+      [DllImport("user32.dll")]
+      public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+    }
+"@
+    $KEYEVENTF_KEYUP = 0x0002
+    $VK_SHIFT = 0x10
+    $VK_LEFT = 0x25
+    $VK_CONTROL = 0x11
+    $VK_V = 0x56
+    $count = ${safeCharCount}
+    if ($count -le 0) {
+      exit 1
+    }
+    [KeySim]::keybd_event($VK_SHIFT, 0, 0, [UIntPtr]::Zero)
+    for ($i = 0; $i -lt $count; $i++) {
+      [KeySim]::keybd_event($VK_LEFT, 0, 0, [UIntPtr]::Zero)
+      [KeySim]::keybd_event($VK_LEFT, 0, $KEYEVENTF_KEYUP, [UIntPtr]::Zero)
+    }
+    [KeySim]::keybd_event($VK_SHIFT, 0, $KEYEVENTF_KEYUP, [UIntPtr]::Zero)
+    [KeySim]::keybd_event($VK_CONTROL, 0, 0, [UIntPtr]::Zero)
+    [KeySim]::keybd_event($VK_V, 0, 0, [UIntPtr]::Zero)
+    [KeySim]::keybd_event($VK_V, 0, $KEYEVENTF_KEYUP, [UIntPtr]::Zero)
+    [KeySim]::keybd_event($VK_CONTROL, 0, $KEYEVENTF_KEYUP, [UIntPtr]::Zero)
+  `;
+}
+
 export function createWindowsCaptureForegroundScript(): string {
   return `
     Add-Type -TypeDefinition @"
@@ -143,6 +176,26 @@ export class AutoPaste {
       bundleId,
       (id) => this.restoreForegroundApp(id),
       () => this.paste()
+    );
+  }
+
+  async replaceRecentTextInApp(
+    bundleId: string | null | undefined,
+    replacementText: string,
+    charsToReplace: number
+  ): Promise<void> {
+    await this.writeClipboard(replacementText);
+
+    if (this.platform !== 'win32') {
+      throw new Error('一键带入目前仅支持 Windows 自动替换。');
+    }
+
+    await runAutoPasteSequence(
+      bundleId,
+      (id) => this.restoreForegroundApp(id),
+      async () => {
+        await this.execPowerShell(createWindowsReplaceRecentTextScript(charsToReplace));
+      }
     );
   }
 

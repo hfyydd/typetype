@@ -88,11 +88,14 @@ function getModelFilesFromDirectory(modelDirectory: string): ModelFiles | null {
       continue;
     }
 
-    const bpeVocabPath = path.join(modelDirectory, 'bbpe.model');
+    const bpeVocabPath = [
+      path.join(modelDirectory, 'bpe.model'),
+      path.join(modelDirectory, 'bbpe.model'),
+    ].find((candidate) => fs.existsSync(candidate)) ?? null;
     return {
       modelPath: modelCandidate,
       tokensPath: tokensCandidate,
-      bpeVocabPath: fs.existsSync(bpeVocabPath) ? bpeVocabPath : null,
+      bpeVocabPath,
     };
   }
 
@@ -205,7 +208,9 @@ function isModelDirectoryCompatible(
   }
 
   const directoryName = path.basename(modelDirectory).toLowerCase();
-  const hasBpeVocab = fs.existsSync(path.join(modelDirectory, 'bbpe.model'));
+  const hasBpeVocab =
+    fs.existsSync(path.join(modelDirectory, 'bpe.model')) ||
+    fs.existsSync(path.join(modelDirectory, 'bbpe.model'));
   const looksStreaming =
     directoryName.includes('streaming') ||
     directoryName.includes('zipformer') ||

@@ -17,7 +17,7 @@ const OPENAI_CONFIG = {
   provider: "openai",
   api_key: "openai-token",
   base_url: "https://api.openai.com/v1",
-  model: "gpt-5.5",
+  model: "gpt-5.1",
   temperature: 0.3,
   max_tokens: 4096,
 };
@@ -64,7 +64,7 @@ test("rewriteWithPreferredLlm supports GPT through OpenAI API key config", async
   assert.deepEqual(calls, [{
     provider: "openai",
     baseUrl: "https://api.openai.com/v1",
-    model: "gpt-5.5",
+    model: "gpt-5.1",
   }]);
 });
 

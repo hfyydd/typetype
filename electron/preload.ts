@@ -9,6 +9,7 @@ import {
   DictionaryImportPreview,
   DictionaryImportRequest,
   DictionaryViewData,
+  StreamingAiPanelState,
 } from './types';
 
 export interface ElectronAPI {
@@ -35,8 +36,15 @@ export interface ElectronAPI {
   commitDictionaryImport: (preview: DictionaryImportPreview) => Promise<DictionaryViewData>;
   selectDictionaryImportFile: () => Promise<DictionaryImportPreview | null>;
   exportDictionary: () => Promise<{ ok: boolean; path?: string }>;
+  getStreamingAiPanelState: () => Promise<StreamingAiPanelState>;
+  showStreamingAiPanel: () => Promise<StreamingAiPanelState>;
+  clearStreamingAiPanel: () => Promise<StreamingAiPanelState>;
+  copyStreamingAiRaw: () => Promise<StreamingAiPanelState>;
+  copyStreamingAiSummary: () => Promise<StreamingAiPanelState>;
+  applyStreamingAiRefinedRaw: () => Promise<StreamingAiPanelState>;
   subscribeSnapshot: (listener: (snapshot: UiSnapshot) => void) => () => void;
   subscribeSettingsViewData: (listener: (view: SettingsViewData) => void) => () => void;
+  subscribeStreamingAiPanelState: (listener: (state: StreamingAiPanelState) => void) => () => void;
   platform: string;
 }
 
@@ -64,6 +72,12 @@ const api: ElectronAPI = {
   commitDictionaryImport: (preview: DictionaryImportPreview) => ipcRenderer.invoke('commit_dictionary_import', preview),
   selectDictionaryImportFile: () => ipcRenderer.invoke('select_dictionary_import_file'),
   exportDictionary: () => ipcRenderer.invoke('export_dictionary'),
+  getStreamingAiPanelState: () => ipcRenderer.invoke('get_streaming_ai_panel_state'),
+  showStreamingAiPanel: () => ipcRenderer.invoke('show_streaming_ai_panel'),
+  clearStreamingAiPanel: () => ipcRenderer.invoke('clear_streaming_ai_panel'),
+  copyStreamingAiRaw: () => ipcRenderer.invoke('copy_streaming_ai_raw'),
+  copyStreamingAiSummary: () => ipcRenderer.invoke('copy_streaming_ai_summary'),
+  applyStreamingAiRefinedRaw: () => ipcRenderer.invoke('apply_streaming_ai_refined_raw'),
   subscribeSnapshot: (listener: (snapshot: UiSnapshot) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, snapshot: UiSnapshot) => {
       listener(snapshot);
@@ -87,6 +101,20 @@ const api: ElectronAPI = {
 
     return () => {
       ipcRenderer.removeListener('settings_view_data_updated', wrapped);
+    };
+  },
+  subscribeStreamingAiPanelState: (listener: (state: StreamingAiPanelState) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, state: StreamingAiPanelState) => {
+      listener(state);
+    };
+
+    ipcRenderer.on('streaming_ai_panel_updated', wrapped);
+    ipcRenderer.invoke('get_streaming_ai_panel_state').then((state: StreamingAiPanelState) => {
+      listener(state);
+    });
+
+    return () => {
+      ipcRenderer.removeListener('streaming_ai_panel_updated', wrapped);
     };
   },
   platform: process.platform,
