@@ -92,7 +92,7 @@ export class TranslationEngine {
       modelPathOrId,
       bundledModelPath,
       targetLanguage,
-      text,
+      textLength: text.length,
     });
 
     return new Promise<string>((resolve, reject) => {
@@ -152,7 +152,7 @@ export class TranslationEngine {
       modelPath,
       llamaCliPath,
       targetLanguage: definition.hyTargetLanguage,
-      text,
+      textLength: text.length,
     });
 
     try {
@@ -160,7 +160,7 @@ export class TranslationEngine {
       const translated = cleanupHyMt2Output(output);
       console.log('[translation-debug] hy-mt2-result', {
         targetLanguage: definition.hyTargetLanguage,
-        text: translated,
+        textLength: translated.length,
       });
       return translated;
     } finally {
@@ -216,7 +216,7 @@ export class TranslationEngine {
       if (message.type === 'result') {
         console.log('[translation-debug] worker-result', {
           requestId: message.requestId,
-          text: message.text ?? '',
+          textLength: (message.text ?? '').length,
         });
         pending.resolve(message.text ?? '');
         return;

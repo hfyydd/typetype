@@ -1,6 +1,11 @@
 export type RecognitionMode = 'non_streaming' | 'streaming_output';
+export type StreamingModelPreference =
+  | 'multilingual_realtime'
+  | 'multilingual_segmented'
+  | 'zh_high_accuracy_realtime';
 export type StreamingEnhancementMode = 'offline_private' | 'online_enhanced';
 export type ComputeBackend = 'auto' | 'cpu' | 'gpu';
+export type VoicePackagePreference = 'fast_offline' | 'pro_high_accuracy';
 export type TranslationTargetLanguage =
   | 'zh'
   | 'en'
@@ -99,6 +104,23 @@ export interface LlmRewriteResponse {
   polished_text: string;
 }
 
+export interface RichAsrSegment {
+  text: string;
+  start?: number;
+  end?: number;
+  confidence?: number;
+  language?: string;
+}
+
+export interface RichAsrResult {
+  text: string;
+  language?: string;
+  confidence?: number;
+  segments: RichAsrSegment[];
+  candidates: string[];
+  code_switch_hints: string[];
+}
+
 export type DictionaryEntryKind = 'term' | 'replacement';
 export type DictionaryEntrySource = 'manual' | 'import' | 'legacy' | 'auto_learned';
 export type DictionaryImportItemStatus = 'add' | 'update' | 'duplicate' | 'invalid' | 'too_long';
@@ -180,7 +202,9 @@ export interface Settings {
   auto_paste: boolean;
   launch_at_login: boolean;
   recognition_mode: RecognitionMode;
+  streaming_model: StreamingModelPreference;
   compute_backend: ComputeBackend;
+  voice_package: VoicePackagePreference;
   translation_target_language: TranslationTargetLanguage;
   auto_learning_enabled: boolean;
   voice_formatting_enabled: boolean;
@@ -200,6 +224,8 @@ export interface StreamingAiPanelState {
   active: boolean;
   status: StreamingAiPanelStatus;
   status_text: string;
+  rewrite_scenario: RewriteScenario;
+  rewrite_scenario_label: string;
   raw_text: string;
   refined_raw_text: string;
   ai_text: string;

@@ -12,6 +12,8 @@ const hotkeyProfileAltButton = document.querySelector("#hotkey-profile-alt");
 const autoPasteToggle = document.querySelector("#auto_paste");
 const launchAtLoginToggle = document.querySelector("#launch_at_login");
 const recognitionModeSelect = document.querySelector("#recognition_mode");
+const streamingModelSelect = document.querySelector("#streaming_model");
+const voicePackageSelect = document.querySelector("#voice_package");
 const voiceFormattingToggle = document.querySelector("#voice_formatting_enabled");
 const autoLearningToggle = document.querySelector("#auto_learning_enabled");
 const streamingAiPanelToggle = document.querySelector("#streaming_ai_panel_enabled");
@@ -95,12 +97,12 @@ const TEXT_INPUT_SAVE_DELAY_MS = 450;
 
 const LLM_PROVIDER_PRESETS = {
   openai: {
-    label: "OpenAI GPT（快速推荐）",
+    label: "OpenAI",
     provider: "openai",
     base_url: "https://api.openai.com/v1",
     model: "gpt-5.1",
     temperature: 0.3,
-    apiKeyHelp: "请填写 OpenAI Platform API Key；ChatGPT Plus/Pro 订阅不等于 API 免费额度。默认使用适合语音润写的快速模型，可手动改成更高质量模型。获取地址：https://platform.openai.com/api-keys",
+    apiKeyHelp: "请填写 OpenAI Platform API Key；ChatGPT Plus/Pro 订阅不等于 API 免费额度。获取地址：https://platform.openai.com/api-keys",
     placeholder: "粘贴 OpenAI Platform API Key",
   },
   minimax_cn: {
@@ -163,7 +165,7 @@ const LLM_PROVIDER_PRESETS = {
     base_url: "https://open.bigmodel.cn/api/paas/v4",
     model: "glm-4.7-flash",
     temperature: 0.3,
-    apiKeyHelp: "请填写智谱开放平台 API Key，不要填写 OpenAI 或其他平台的 Key。默认使用 Flash 快速模型，适合语音润写。",
+    apiKeyHelp: "请填写智谱开放平台 API Key，不要填写 OpenAI 或其他平台的 Key。",
     placeholder: "粘贴智谱 API Key",
   },
   kimi_cn: {
@@ -172,7 +174,7 @@ const LLM_PROVIDER_PRESETS = {
     base_url: "https://api.moonshot.cn/v1",
     model: "moonshot-v1-8k",
     temperature: 1,
-    apiKeyHelp: "请填写 Kimi 国内开放平台 API Key；国内 Key 应使用 api.moonshot.cn。默认使用更快的 moonshot-v1-8k，想要更强效果可手动改为平台可用的 Kimi 模型。",
+    apiKeyHelp: "请填写 Kimi 国内开放平台 API Key；国内 Key 应使用 api.moonshot.cn。",
     placeholder: "粘贴 Kimi 国内 API Key",
   },
   kimi_intl: {
@@ -181,7 +183,7 @@ const LLM_PROVIDER_PRESETS = {
     base_url: "https://api.moonshot.ai/v1",
     model: "moonshot-v1-8k",
     temperature: 1,
-    apiKeyHelp: "请填写 Kimi 国际平台 API Key；国际 Key 应使用 api.moonshot.ai。默认使用更快的 moonshot-v1-8k，想要更强效果可手动改为平台可用的 Kimi 模型。",
+    apiKeyHelp: "请填写 Kimi 国际平台 API Key；国际 Key 应使用 api.moonshot.ai。",
     placeholder: "粘贴 Kimi 国际 API Key",
   },
   siliconflow: {
@@ -190,7 +192,7 @@ const LLM_PROVIDER_PRESETS = {
     base_url: "https://api.siliconflow.cn/v1",
     model: "zai-org/GLM-4.7-Flash",
     temperature: 0.3,
-    apiKeyHelp: "请填写硅基流动 API Key。默认使用轻量快速模型；如账号模型名不同，可在硅基流动模型列表复制可用模型名。",
+    apiKeyHelp: "请填写硅基流动 API Key。",
     placeholder: "粘贴硅基流动 API Key",
   },
   baidu_cn: {
@@ -199,7 +201,7 @@ const LLM_PROVIDER_PRESETS = {
     base_url: "https://qianfan.baidubce.com/v2",
     model: "ernie-speed-pro-128k",
     temperature: 0.3,
-    apiKeyHelp: "请填写百度千帆国内平台 API Key。默认使用 ERNIE Speed 快速模型，适合语音润写。",
+    apiKeyHelp: "请填写百度千帆国内平台 API Key。",
     placeholder: "粘贴百度千帆国内 API Key",
   },
   baidu_intl: {
@@ -217,7 +219,7 @@ const LLM_PROVIDER_PRESETS = {
     base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
     model: "gemini-2.5-flash",
     temperature: 0.3,
-    apiKeyHelp: "请填写 Google AI Studio 生成的 Gemini API Key。默认使用 Gemini Flash 快速模型。",
+    apiKeyHelp: "请填写 Google AI Studio 生成的 Gemini API Key。",
     placeholder: "粘贴 Gemini API Key",
   },
   baichuan: {
@@ -343,10 +345,10 @@ function inferLlmPresetKey(rewrite = {}) {
 }
 
 function updateLlmPresetHints(preset) {
-  llmBaseUrlDescription.textContent = `${preset.label} 自动使用：${preset.base_url}`;
+  llmBaseUrlDescription.textContent = `${preset.label} 会自动使用匹配的服务地址。`;
   llmApiKeyDescription.textContent = preset.apiKeyHelp;
   llmApiKeyInput.placeholder = preset.placeholder;
-  llmModelDescription.textContent = `${preset.label} 默认模型：${preset.model}`;
+  llmModelDescription.textContent = `${preset.label} 已自动填写服务参数。`;
 }
 
 function applyLlmPresetToControls(presetKey, { keepApiKey = true } = {}) {
@@ -387,6 +389,8 @@ function fillSettingsView(view) {
   autoPasteToggle.checked = view.settings.auto_paste;
   launchAtLoginToggle.checked = view.settings.launch_at_login ?? false;
   recognitionModeSelect.value = view.settings.recognition_mode ?? "non_streaming";
+  streamingModelSelect.value = view.settings.streaming_model ?? "multilingual_realtime";
+  voicePackageSelect.value = view.settings.voice_package ?? "fast_offline";
   voiceFormattingToggle.checked = view.settings.voice_formatting_enabled ?? true;
   autoLearningToggle.checked = view.settings.auto_learning_enabled ?? true;
   streamingAiPanelToggle.checked = view.settings.streaming_ai_panel_enabled ?? false;
@@ -477,6 +481,8 @@ function collectSettings() {
     auto_paste: autoPasteToggle.checked,
     launch_at_login: launchAtLoginToggle.checked,
     recognition_mode: recognitionModeSelect.value,
+    streaming_model: streamingModelSelect.value,
+    voice_package: voicePackageSelect.value,
     voice_formatting_enabled: voiceFormattingToggle.checked,
     auto_learning_enabled: autoLearningToggle.checked,
     streaming_ai_panel_enabled: streamingAiPanelToggle.checked,
@@ -502,13 +508,12 @@ function hasApiKeyConfig(settings) {
 
 function inferLlmRoute(rewrite = {}) {
   const model = (rewrite.model || "").toLowerCase();
-  const modelLabel = rewrite.model || "未填写模型";
   const presetKey = inferLlmPresetKey(rewrite);
   const preset = getLlmPreset(presetKey);
   const isOpenAi = preset.provider === "openai" || /^gpt[-\w.]*|^o\d/.test(model);
   return {
     key: presetKey,
-    label: `${preset.label} · ${modelLabel}`,
+    label: preset.label,
     isOpenAi,
   };
 }
@@ -516,7 +521,7 @@ function inferLlmRoute(rewrite = {}) {
 function getApiModelLabel(settings) {
   const rewrite = settings?.llm_rewrite ?? {};
   if (!rewrite.api_key?.trim()) {
-    return "未配置 API Key 模型";
+    return "未配置 API Key";
   }
   return inferLlmRoute(rewrite).label;
 }
@@ -538,14 +543,14 @@ function updateLlmActiveRoute(settings) {
     const rewrite = settings.llm_rewrite ?? {};
     const route = inferLlmRoute(rewrite);
     const keyTip = route.isOpenAi
-      ? "正在使用 OpenAI Platform API Key 调用 GPT；ChatGPT Plus/Pro 订阅不等于 API 免费额度。"
-      : "正在使用上方 API Key 模型做结构化润写。";
-    llmActiveRouteLabel.textContent = `当前通道：${route.label}。${keyTip}`;
+      ? "正在使用 OpenAI Platform API Key；ChatGPT Plus/Pro 订阅不等于 API 免费额度。"
+      : "正在使用上方 API Key 做结构化润写。";
+    llmActiveRouteLabel.textContent = `当前服务：${route.label}。${keyTip}`;
     llmActiveRouteLabel.dataset.tone = "success";
     return;
   }
 
-  llmActiveRouteLabel.textContent = "已启用，但还没有 API Key。GPT 和国产模型都在上方填写 API Key、Base URL 和模型名。";
+  llmActiveRouteLabel.textContent = "已启用，但还没有 API Key。请选择服务厂家并填写对应平台的 API Key。";
   llmActiveRouteLabel.dataset.tone = "error";
 }
 
@@ -859,7 +864,7 @@ function publicModelLabel(label) {
   if (value.includes("sense") || value.includes("SenseVoice")) {
     return "高精度整段识别引擎";
   }
-  return value || "自动识别模型";
+  return value || "自动识别能力";
 }
 
 function publicModelPathLabel(pathLabel) {
@@ -877,7 +882,7 @@ async function refreshSettingsView(statusMessage = null) {
   if (statusMessage) {
     setStatus(statusMessage);
   } else {
-    setStatus(`已加载设置。内置模型 ${view.model_status}。`);
+    setStatus(`已加载设置。本机识别 ${view.model_status}。`);
   }
 }
 
@@ -955,6 +960,7 @@ for (const element of [
   autoPasteToggle,
   launchAtLoginToggle,
   recognitionModeSelect,
+  streamingModelSelect,
   voiceFormattingToggle,
   autoLearningToggle,
   streamingAiPanelToggle,
@@ -1007,7 +1013,7 @@ llmTestButton.addEventListener("click", async () => {
     const result = await electronAPI.testLlmConnection(config);
     if (result.ok) {
       if (result.latency_ms >= 8000) {
-        llmTestStatus.textContent = `连接成功但偏慢 (${result.latency_ms}ms)，建议换快速模型或检查网络/代理。`;
+        llmTestStatus.textContent = `连接成功但偏慢 (${result.latency_ms}ms)，建议检查网络、代理或服务配置。`;
         llmTestStatus.dataset.tone = "warning";
       } else if (result.latency_ms >= 4000) {
         llmTestStatus.textContent = `连接成功，速度一般 (${result.latency_ms}ms)。`;

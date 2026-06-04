@@ -1,3 +1,5 @@
+import { stripUnknownTokens } from './transcript-cleanup';
+
 export interface StreamingAiParsedResult {
   refinedRawText: string;
   summaryText: string;
@@ -26,11 +28,11 @@ function stripMarkdownLine(line: string): string {
     .replace(/`/g, '')
     .trim();
 
-  return withoutMarkdown
+  return stripUnknownTokens(withoutMarkdown
     .replace(/\s+([，。！？；：、])/gu, '$1')
     .replace(/([（【《])\s+/gu, '$1')
     .replace(/\s+([）】》])/gu, '$1')
-    .trim();
+    .trim());
 }
 
 function normalizedHeadingName(line: string): string {
@@ -110,10 +112,10 @@ export function sanitizeStreamingAiText(text: string): string {
     kept.push(stripMarkdownLine(rawLine));
   }
 
-  return kept
+  return stripUnknownTokens(kept
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
-    .trim();
+    .trim());
 }
 
 export function parseStreamingAiResult(text: string, fallbackRawText: string): StreamingAiParsedResult {

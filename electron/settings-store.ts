@@ -2,7 +2,24 @@ import * as toml from '@iarna/toml';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { Settings } from './types';
+import {
+  ComputeBackend,
+  RecognitionMode,
+  Settings,
+  StreamingModelPreference,
+  StreamingEnhancementMode,
+  VoicePackagePreference,
+} from './types';
+
+const RECOGNITION_MODES = new Set<RecognitionMode>(['non_streaming', 'streaming_output']);
+const STREAMING_MODELS = new Set<StreamingModelPreference>([
+  'multilingual_realtime',
+  'multilingual_segmented',
+  'zh_high_accuracy_realtime',
+]);
+const COMPUTE_BACKENDS = new Set<ComputeBackend>(['auto', 'cpu', 'gpu']);
+const STREAMING_ENHANCEMENT_MODES = new Set<StreamingEnhancementMode>(['offline_private', 'online_enhanced']);
+const VOICE_PACKAGES = new Set<VoicePackagePreference>(['fast_offline', 'pro_high_accuracy']);
 
 export class SettingsStore {
   private settingsPath: string;
@@ -31,7 +48,9 @@ export class SettingsStore {
       auto_paste: true,
       launch_at_login: false,
       recognition_mode: 'non_streaming',
+      streaming_model: 'multilingual_realtime',
       compute_backend: 'auto',
+      voice_package: 'fast_offline',
       translation_target_language: 'en',
       auto_learning_enabled: true,
       voice_formatting_enabled: true,
@@ -58,12 +77,51 @@ export class SettingsStore {
       if (fs.existsSync(this.settingsPath)) {
         const content = fs.readFileSync(this.settingsPath, 'utf-8');
         const parsed = toml.parse(content);
-        return { ...this.getDefaultSettings(), ...parsed } as Settings;
+        return this.normalizeSettings(parsed as Partial<Settings>);
       }
     } catch (e) {
       console.error('Failed to load settings:', e);
     }
     return this.getDefaultSettings();
+  }
+
+  private normalizeSettings(input: Partial<Settings> | Record<string, unknown>): Settings {
+    const defaults = this.getDefaultSettings();
+    const parsed = input as Partial<Settings>;
+    const llmRewrite = {
+      ...defaults.llm_rewrite,
+      ...(typeof parsed.llm_rewrite === 'object' && parsed.llm_rewrite ? parsed.llm_rewrite : {}),
+    };
+
+    return {
+      ...defaults,
+      ...parsed,
+      recognition_mode: RECOGNITION_MODES.has(parsed.recognition_mode as RecognitionMode)
+        ? parsed.recognition_mode as RecognitionMode
+        : defaults.recognition_mode,
+      streaming_model: STREAMING_MODELS.has(parsed.streaming_model as StreamingModelPreference)
+        ? parsed.streaming_model as StreamingModelPreference
+        : defaults.streaming_model,
+      compute_backend: COMPUTE_BACKENDS.has(parsed.compute_backend as ComputeBackend)
+        ? parsed.compute_backend as ComputeBackend
+        : defaults.compute_backend,
+      voice_package: VOICE_PACKAGES.has(parsed.voice_package as VoicePackagePreference)
+        ? parsed.voice_package as VoicePackagePreference
+        : defaults.voice_package,
+      streaming_enhancement_mode: STREAMING_ENHANCEMENT_MODES.has(parsed.streaming_enhancement_mode as StreamingEnhancementMode)
+        ? parsed.streaming_enhancement_mode as StreamingEnhancementMode
+        : defaults.streaming_enhancement_mode,
+      microphone_id: typeof parsed.microphone_id === 'string' && parsed.microphone_id.trim()
+        ? parsed.microphone_id
+        : null,
+      model_path: typeof parsed.model_path === 'string' && parsed.model_path.trim()
+        ? parsed.model_path
+        : null,
+      custom_dictionary: Array.isArray(parsed.custom_dictionary)
+        ? parsed.custom_dictionary
+        : defaults.custom_dictionary,
+      llm_rewrite: llmRewrite,
+    };
   }
 
   private migrateLegacyDataDir(): void {
@@ -82,10 +140,11 @@ export class SettingsStore {
 
   saveSettings(settings: Settings): void {
     try {
+      const normalized = this.normalizeSettings(settings);
       fs.mkdirSync(this.dataDir, { recursive: true });
-      const content = toml.stringify(settings as any);
+      const content = toml.stringify(normalized as any);
       fs.writeFileSync(this.settingsPath, content, 'utf-8');
-      this.settings = settings;
+      this.settings = normalized;
     } catch (e) {
       console.error('Failed to save settings:', e);
       throw e;

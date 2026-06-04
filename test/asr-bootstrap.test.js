@@ -11,7 +11,11 @@ function createSettings(overrides = {}) {
     auto_paste: true,
     launch_at_login: false,
     recognition_mode: "non_streaming",
+    streaming_model: "multilingual_realtime",
     compute_backend: "auto",
+    voice_package: "fast_offline",
+    streaming_enhancement_mode: "offline_private",
+    rewrite_scenario: "general",
     translation_target_language: "en",
     custom_dictionary: [],
     model_path: null,
@@ -113,13 +117,13 @@ function loadAsrBootstrapWithMocks({ findModelPath, initialize, moduleMocks = {}
     if (request.endsWith("/asr-engine") || request === "./asr-engine") {
       return {
         AsrEngine: class FakeAsrEngine {
-          constructor(modelPath, tokensPath) {
-            this.modelPath = modelPath;
-            this.tokensPath = tokensPath;
+          constructor(modelInfo, options) {
+            this.modelInfo = modelInfo;
+            this.options = options;
           }
 
-          static findModelPath(paths) {
-            return findModelPath(paths);
+          static findModelPath(paths, recognitionMode) {
+            return findModelPath(paths, recognitionMode);
           }
 
           async initialize() {
@@ -168,6 +172,98 @@ test("initializeAsrEngine prefers the configured model path before fallback sear
 
   assert.ok(engine);
   assert.deepEqual(calls, [["/tmp/custom-model"]]);
+});
+
+test("initializeAsrEngine defaults streaming to multilingual realtime model", async () => {
+  const calls = [];
+  const { initializeAsrEngine } = loadAsrBootstrapWithMocks({
+    findModelPath(paths, recognitionMode) {
+      calls.push({ paths, recognitionMode });
+      return {
+        modelPath: "/resources/models/sherpa-onnx-streaming-paraformer-trilingual-zh-cantonese-en/encoder.int8.onnx",
+        tokensPath: "/resources/models/sherpa-onnx-streaming-paraformer-trilingual-zh-cantonese-en/tokens.txt",
+        encoderPath: "/resources/models/sherpa-onnx-streaming-paraformer-trilingual-zh-cantonese-en/encoder.int8.onnx",
+        decoderPath: "/resources/models/sherpa-onnx-streaming-paraformer-trilingual-zh-cantonese-en/decoder.int8.onnx",
+      };
+    },
+    async initialize() {},
+  });
+
+  const engine = await initializeAsrEngine({
+    dataDir: "/tmp/typetype-data",
+    settings: createSettings({
+      recognition_mode: "streaming_output",
+      streaming_model: "multilingual_realtime",
+    }),
+    processResourcesPath: "/Applications/typetype.app/Contents/Resources",
+    appPath: "/Applications/typetype.app/Contents/Resources/app.asar",
+  });
+
+  assert.ok(engine);
+  assert.equal(calls[0].recognitionMode, "streaming_output");
+  assert.match(calls[0].paths[0], /streaming-paraformer-trilingual/);
+  assert.match(calls[0].paths.join("\n"), /streaming-zipformer-ctc-zh-xlarge/);
+  assert.equal(engine.options.recognitionMode, "streaming_output");
+});
+
+test("initializeAsrEngine uses non-streaming multilingual model for segmented streaming", async () => {
+  const calls = [];
+  const { initializeAsrEngine } = loadAsrBootstrapWithMocks({
+    findModelPath(paths, recognitionMode) {
+      calls.push({ paths, recognitionMode });
+      return {
+        modelPath: "/resources/models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8/model.int8.onnx",
+        tokensPath: "/resources/models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8/tokens.txt",
+      };
+    },
+    async initialize() {},
+  });
+
+  const engine = await initializeAsrEngine({
+    dataDir: "/tmp/typetype-data",
+    settings: createSettings({
+      recognition_mode: "streaming_output",
+      streaming_model: "multilingual_segmented",
+    }),
+    processResourcesPath: "/Applications/typetype.app/Contents/Resources",
+    appPath: "/Applications/typetype.app/Contents/Resources/app.asar",
+  });
+
+  assert.ok(engine);
+  assert.equal(calls[0].recognitionMode, "non_streaming");
+  assert.match(calls[0].paths[0], /sense-voice/);
+  assert.equal(engine.options.recognitionMode, "non_streaming");
+});
+
+test("initializeAsrEngine prioritizes Chinese realtime model when selected", async () => {
+  const calls = [];
+  const { initializeAsrEngine } = loadAsrBootstrapWithMocks({
+    findModelPath(paths, recognitionMode) {
+      calls.push({ paths, recognitionMode });
+      return {
+        modelPath: "/resources/models/sherpa-onnx-streaming-zipformer-ctc-zh-xlarge-int8/model.int8.onnx",
+        tokensPath: "/resources/models/sherpa-onnx-streaming-zipformer-ctc-zh-xlarge-int8/tokens.txt",
+        bpeVocabPath: "/resources/models/sherpa-onnx-streaming-zipformer-ctc-zh-xlarge-int8/bpe.model",
+      };
+    },
+    async initialize() {},
+  });
+
+  const engine = await initializeAsrEngine({
+    dataDir: "/tmp/typetype-data",
+    settings: createSettings({
+      recognition_mode: "streaming_output",
+      streaming_model: "zh_high_accuracy_realtime",
+    }),
+    processResourcesPath: "/Applications/typetype.app/Contents/Resources",
+    appPath: "/Applications/typetype.app/Contents/Resources/app.asar",
+  });
+
+  assert.ok(engine);
+  assert.equal(calls[0].recognitionMode, "streaming_output");
+  assert.match(calls[0].paths[0], /streaming-zipformer-ctc-zh-xlarge/);
+  assert.match(calls[0].paths.join("\n"), /streaming-paraformer-trilingual/);
+  assert.equal(engine.options.recognitionMode, "streaming_output");
 });
 
 test("initializeAsrEngine returns null instead of throwing when model download request fails", async () => {
