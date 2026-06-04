@@ -5,12 +5,17 @@ import * as path from 'path';
 import { app } from 'electron';
 
 import { getDefaultNumThreads, getProviderCandidates, ProviderName } from './asr-runtime';
-import { ComputeBackend, RecognitionMode } from './types';
+import { stripUnknownTokens } from './transcript-cleanup';
+import { ComputeBackend, RecognitionMode, RichAsrResult } from './types';
 
 export interface ModelFiles {
   modelPath: string;
   tokensPath: string;
+  modelKind?: 'single' | 'paraformer';
+  encoderPath?: string | null;
+  decoderPath?: string | null;
   bpeVocabPath?: string | null;
+  hotwordsPath?: string | null;
 }
 
 export function createRecognizerConfig(
@@ -35,34 +40,54 @@ export function createRecognizerConfig(
 }
 
 function createStreamingRecognizerConfig(
-  modelPath: string,
-  tokensPath: string,
-  bpeVocabPath: string | null,
+  modelFiles: ModelFiles,
   provider: ProviderName,
   numThreads: number
 ) {
-  return {
+  const isParaformer = Boolean(modelFiles.encoderPath && modelFiles.decoderPath);
+  const modelConfig: Record<string, unknown> = {
+    tokens: modelFiles.tokensPath,
+    numThreads,
+    provider,
+    debug: false,
+  };
+
+  if (isParaformer) {
+    modelConfig.paraformer = {
+      encoder: modelFiles.encoderPath,
+      decoder: modelFiles.decoderPath,
+    };
+  } else {
+    modelConfig.zipformer2Ctc = {
+      model: modelFiles.modelPath,
+    };
+    modelConfig.modelingUnit = modelFiles.bpeVocabPath ? 'bpe' : 'cjkchar';
+    modelConfig.bpeVocab = modelFiles.bpeVocabPath ?? '';
+  }
+
+  const canUseHotwords = Boolean(modelFiles.hotwordsPath && !isParaformer);
+  const config: Record<string, unknown> = {
     featConfig: {
       sampleRate: 16000,
       featureDim: 80,
     },
-    modelConfig: {
-      zipformer2Ctc: {
-        model: modelPath,
-      },
-      tokens: tokensPath,
-      numThreads,
-      provider,
-      debug: false,
-      modelingUnit: bpeVocabPath ? 'bpe' : 'cjkchar',
-      bpeVocab: bpeVocabPath ?? '',
-    },
-    decodingMethod: 'greedy_search',
+    modelConfig,
+    decodingMethod: canUseHotwords ? 'modified_beam_search' : 'greedy_search',
+    maxActivePaths: canUseHotwords ? 4 : 1,
     enableEndpoint: true,
     rule1MinTrailingSilence: 1.8,
     rule2MinTrailingSilence: 0.8,
     rule3MinUtteranceLength: 12,
     blankPenalty: 0,
+  };
+
+  if (canUseHotwords) {
+    config.hotwordsFile = modelFiles.hotwordsPath;
+    config.hotwordsScore = 1.5;
+  }
+
+  return {
+    ...config,
   };
 }
 
@@ -74,6 +99,7 @@ interface AsrEngineOptions {
 
 function getModelFilesFromDirectory(modelDirectory: string): ModelFiles | null {
   const modelCandidates = [
+    path.join(modelDirectory, 'model.fp16.onnx'),
     path.join(modelDirectory, 'model.int8.onnx'),
     path.join(modelDirectory, 'model.onnx'),
   ];
@@ -95,7 +121,37 @@ function getModelFilesFromDirectory(modelDirectory: string): ModelFiles | null {
     return {
       modelPath: modelCandidate,
       tokensPath: tokensCandidate,
+      modelKind: 'single',
       bpeVocabPath,
+      hotwordsPath: fs.existsSync(path.join(modelDirectory, 'hotwords.txt'))
+        ? path.join(modelDirectory, 'hotwords.txt')
+        : null,
+    };
+  }
+
+  const encoderPath = [
+    path.join(modelDirectory, 'encoder.fp16.onnx'),
+    path.join(modelDirectory, 'encoder.int8.onnx'),
+    path.join(modelDirectory, 'encoder.onnx'),
+  ].find((candidate) => fs.existsSync(candidate));
+  const decoderPath = [
+    path.join(modelDirectory, 'decoder.fp16.onnx'),
+    path.join(modelDirectory, 'decoder.int8.onnx'),
+    path.join(modelDirectory, 'decoder.onnx'),
+  ].find((candidate) => fs.existsSync(candidate));
+  const tokensCandidate = path.join(modelDirectory, 'tokens.txt');
+
+  if (encoderPath && decoderPath && fs.existsSync(tokensCandidate)) {
+    return {
+      modelPath: encoderPath,
+      tokensPath: tokensCandidate,
+      modelKind: 'paraformer',
+      encoderPath,
+      decoderPath,
+      bpeVocabPath: null,
+      hotwordsPath: fs.existsSync(path.join(modelDirectory, 'hotwords.txt'))
+        ? path.join(modelDirectory, 'hotwords.txt')
+        : null,
     };
   }
 
@@ -110,7 +166,10 @@ function hasOnlyAsciiModelPaths(modelFiles: ModelFiles): boolean {
   return (
     isAsciiPath(modelFiles.modelPath) &&
     isAsciiPath(modelFiles.tokensPath) &&
-    (!modelFiles.bpeVocabPath || isAsciiPath(modelFiles.bpeVocabPath))
+    (!modelFiles.encoderPath || isAsciiPath(modelFiles.encoderPath)) &&
+    (!modelFiles.decoderPath || isAsciiPath(modelFiles.decoderPath)) &&
+    (!modelFiles.bpeVocabPath || isAsciiPath(modelFiles.bpeVocabPath)) &&
+    (!modelFiles.hotwordsPath || isAsciiPath(modelFiles.hotwordsPath))
   );
 }
 
@@ -211,9 +270,22 @@ function isModelDirectoryCompatible(
   const hasBpeVocab =
     fs.existsSync(path.join(modelDirectory, 'bpe.model')) ||
     fs.existsSync(path.join(modelDirectory, 'bbpe.model'));
+  const hasParaformerFiles =
+    (
+      fs.existsSync(path.join(modelDirectory, 'encoder.int8.onnx')) ||
+      fs.existsSync(path.join(modelDirectory, 'encoder.fp16.onnx')) ||
+      fs.existsSync(path.join(modelDirectory, 'encoder.onnx'))
+    ) &&
+    (
+      fs.existsSync(path.join(modelDirectory, 'decoder.int8.onnx')) ||
+      fs.existsSync(path.join(modelDirectory, 'decoder.fp16.onnx')) ||
+      fs.existsSync(path.join(modelDirectory, 'decoder.onnx'))
+    );
   const looksStreaming =
     directoryName.includes('streaming') ||
     directoryName.includes('zipformer') ||
+    directoryName.includes('paraformer') ||
+    hasParaformerFiles ||
     hasBpeVocab;
   const looksOffline =
     directoryName.includes('sense-voice') ||
@@ -280,6 +352,18 @@ export class AsrEngine {
       throw new Error(`BPE vocab file not found: ${this.modelFiles.bpeVocabPath}`);
     }
 
+    if (this.modelFiles.encoderPath && !fs.existsSync(this.modelFiles.encoderPath)) {
+      throw new Error(`Encoder file not found: ${this.modelFiles.encoderPath}`);
+    }
+
+    if (this.modelFiles.decoderPath && !fs.existsSync(this.modelFiles.decoderPath)) {
+      throw new Error(`Decoder file not found: ${this.modelFiles.decoderPath}`);
+    }
+
+    if (this.modelFiles.hotwordsPath && !fs.existsSync(this.modelFiles.hotwordsPath)) {
+      throw new Error(`Hotwords file not found: ${this.modelFiles.hotwordsPath}`);
+    }
+
     const sherpaOnnx = loadSherpaOnnxNode();
     let lastError: unknown = null;
 
@@ -287,9 +371,7 @@ export class AsrEngine {
       try {
         if (this.recognitionMode === 'streaming_output') {
           const config = createStreamingRecognizerConfig(
-            this.modelFiles.modelPath,
-            this.modelFiles.tokensPath,
-            this.modelFiles.bpeVocabPath ?? null,
+            this.modelFiles,
             provider,
             this.numThreads
           );
@@ -321,6 +403,10 @@ export class AsrEngine {
   }
 
   async transcribe(audioSamples: Float32Array): Promise<string> {
+    return (await this.transcribeRich(audioSamples)).text;
+  }
+
+  async transcribeRich(audioSamples: Float32Array): Promise<RichAsrResult> {
     if (!this.recognizer) {
       throw new Error('ASR engine not initialized');
     }
@@ -335,7 +421,7 @@ export class AsrEngine {
       typeof this.recognizer.decodeAsync === 'function'
         ? await this.recognizer.decodeAsync(stream)
         : (this.recognizer.decode(stream), this.recognizer.getResult(stream));
-    return result.text || '';
+    return normalizeOfflineResult(result);
   }
 
   startStreamingSession(): void {
@@ -363,7 +449,7 @@ export class AsrEngine {
       this.recognizer.decode(this.streamingStream);
     }
 
-    return this.recognizer.getResult(this.streamingStream).text || '';
+    return stripUnknownTokens(this.recognizer.getResult(this.streamingStream).text || '');
   }
 
   finishStreamingSession(): string {
@@ -376,7 +462,7 @@ export class AsrEngine {
       this.recognizer.decode(this.streamingStream);
     }
 
-    const text = this.recognizer.getResult(this.streamingStream).text || '';
+    const text = stripUnknownTokens(this.recognizer.getResult(this.streamingStream).text || '');
     this.streamingStream = null;
     return text;
   }
@@ -477,4 +563,32 @@ export class AsrEngine {
     this.recognizer = null;
     this.streamingStream = null;
   }
+}
+
+function normalizeOfflineResult(result: any): RichAsrResult {
+  const text = stripUnknownTokens(String(result?.text ?? ''));
+  const tokens: string[] = Array.isArray(result?.tokens)
+    ? result.tokens.map((token: unknown) => stripUnknownTokens(String(token))).filter(Boolean)
+    : [];
+  const timestamps: number[] = Array.isArray(result?.timestamps) ? result.timestamps.map(Number) : [];
+  const durations: number[] = Array.isArray(result?.durations) ? result.durations.map(Number) : [];
+  const logProbs: number[] = Array.isArray(result?.ys_log_probs) ? result.ys_log_probs.map(Number) : [];
+  const confidence = logProbs.length > 0
+    ? Math.max(0, Math.min(1, Math.exp(logProbs.reduce((sum, value) => sum + value, 0) / logProbs.length)))
+    : undefined;
+
+  return {
+    text,
+    language: typeof result?.lang === 'string' ? result.lang : undefined,
+    confidence,
+    segments: tokens.map((token, index) => ({
+      text: token,
+      start: Number.isFinite(timestamps[index]) ? timestamps[index] : undefined,
+      end: Number.isFinite(timestamps[index]) && Number.isFinite(durations[index])
+        ? timestamps[index] + durations[index]
+        : undefined,
+    })),
+    candidates: text ? [text] : [],
+    code_switch_hints: [],
+  };
 }

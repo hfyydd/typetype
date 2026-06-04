@@ -82,7 +82,7 @@
             <section class="settings-group">
               <div class="settings-group-heading">
                 <h3>音频</h3>
-                <p>选择用于语音输入的麦克风和本地识别模型。</p>
+                <p>选择用于语音输入的麦克风和本机识别能力。</p>
               </div>
 
               <label class="settings-row">
@@ -127,8 +127,35 @@
 
               <label class="settings-row">
                 <div class="settings-row-copy">
+                  <span class="settings-row-title">流式识别能力</span>
+                  <span class="settings-row-description">多语实时适合边说边出字；多语分段在短暂停顿后输出，混输准确率更稳；中文高精度适合纯中文长句。</span>
+                </div>
+                <div class="settings-row-control settings-select-wrap">
+                  <select id="streaming_model" data-setting="streaming_model">
+                    <option value="multilingual_realtime">多语实时流式</option>
+                    <option value="multilingual_segmented">多语分段流式</option>
+                    <option value="zh_high_accuracy_realtime">中文高精度流式</option>
+                  </select>
+                </div>
+              </label>
+
+              <label class="settings-row">
+                <div class="settings-row-copy">
+                  <span class="settings-row-title">识别能力</span>
+                  <span class="settings-row-description">标准模式适合多数电脑；增强模式会自动检测本机能力，不可用时自动回退。</span>
+                </div>
+                <div class="settings-row-control settings-select-wrap">
+                  <select id="voice_package" data-setting="voice_package">
+                    <option value="fast_offline">标准本机识别</option>
+                    <option value="pro_high_accuracy">增强本机识别</option>
+                  </select>
+                </div>
+              </label>
+
+              <label class="settings-row">
+                <div class="settings-row-copy">
                   <span class="settings-row-title">翻译语言</span>
-                  <span class="settings-row-description">翻译流程默认按“中文 -> 目标语言”。优先使用 HY-MT2-1.8B 本地翻译，异常时自动回退内置 NLLB；仅非流式模式可用。</span>
+                  <span class="settings-row-description">翻译流程默认按“中文 -> 目标语言”。优先使用本机翻译资源，异常时自动降级；仅整段识别可用。</span>
                 </div>
                 <div class="settings-row-control settings-select-wrap">
                   <select id="translation_target_language" data-setting="translation_target_language">
@@ -421,7 +448,7 @@
                 <label class="settings-row">
                   <div class="settings-row-copy">
                     <span class="settings-row-title">大模型厂家</span>
-                    <span class="settings-row-description">选择厂家和国内/国际地域后会自动填好 Base URL 和模型名，客户只需要填写对应平台的 API Key。</span>
+                    <span class="settings-row-description">选择服务厂家后，客户只需要填写对应平台的 API Key。</span>
                   </div>
                   <div class="settings-row-control settings-select-wrap">
                     <select id="llm_provider" data-setting="llm_provider">
@@ -445,10 +472,10 @@
                   </div>
                 </label>
 
-                <label class="settings-row settings-row-stack">
+                <label class="settings-row settings-row-stack" hidden>
                   <div class="settings-row-copy">
                     <span class="settings-row-title">Base URL</span>
-                    <span class="settings-row-description" id="llm-base-url-description">根据模型平台自动填写；高级用户也可以手动修改。</span>
+                    <span class="settings-row-description" id="llm-base-url-description">根据服务厂家自动填写；高级用户也可以手动修改。</span>
                   </div>
                   <div class="settings-row-control settings-input-wrap">
                     <input type="text" id="llm_base_url" data-setting="llm_base_url" />
@@ -465,10 +492,10 @@
                   </div>
                 </label>
 
-                <label class="settings-row settings-row-stack">
+                <label class="settings-row settings-row-stack" hidden>
                   <div class="settings-row-copy">
-                    <span class="settings-row-title">模型</span>
-                    <span class="settings-row-description" id="llm-model-description">根据模型平台自动填写默认推荐模型；高级用户也可以手动修改。</span>
+                    <span class="settings-row-title">服务参数</span>
+                    <span class="settings-row-description" id="llm-model-description">根据服务厂家自动填写。</span>
                   </div>
                   <div class="settings-row-control settings-input-wrap">
                     <input type="text" id="llm_model" data-setting="llm_model" />
@@ -476,9 +503,8 @@
                 </label>
 
                 <div class="settings-provider-guide">
-                  <div><strong>填写方式：</strong>先选平台，软件会自动填 Base URL 和模型名，只需要粘贴该平台的 API Key。</div>
-                  <div><strong>推荐润写模型：</strong>OpenAI：gpt-5.1；MiniMax：MiniMax-M2.7；DeepSeek：deepseek-v4-flash；通义千问：qwen-plus；智谱：glm-4.7-flash；Kimi：moonshot-v1-8k；硅基流动：zai-org/GLM-4.7-Flash；百度千帆：ernie-speed-pro-128k；Gemini：gemini-2.5-flash；百川：Baichuan4；豆包：doubao-seed-1-6-250615。</div>
-                  <div>国内版和国际版不要混用；401 通常是 Key、平台或额度权限问题，fetch failed 通常是网络/代理问题。</div>
+                  <div><strong>填写方式：</strong>先选平台，再粘贴该平台的 API Key。</div>
+                  <div>国内版和国际版不要混用；连接失败通常与 Key、平台、额度、网络或代理有关。</div>
                 </div>
 
                 <div class="settings-row">
@@ -533,7 +559,7 @@
             <section class="settings-group">
               <div class="settings-group-heading">
                 <h3>应用信息</h3>
-                <p>离线优先，不依赖用户体系和云端模型下载。</p>
+                <p>离线优先，不依赖用户体系和云端资源下载。</p>
               </div>
 
               <div class="settings-row">
@@ -545,7 +571,7 @@
 
               <div class="settings-row">
                 <div class="settings-row-copy">
-                  <span class="settings-row-title">内置模型</span>
+                  <span class="settings-row-title">识别能力</span>
                   <span class="settings-row-description" id="model-label">-</span>
                 </div>
                 <span class="settings-chip" id="model-status">-</span>
@@ -591,7 +617,7 @@
               <div class="settings-row">
                 <div class="settings-row-copy">
                   <span class="settings-row-title">ASR 自检</span>
-                  <span class="settings-row-description">用当前保存的模式、模型和后端配置做一次实际加载验证。</span>
+                  <span class="settings-row-description">用当前保存的模式和本机资源做一次实际加载验证。</span>
                 </div>
                 <button type="button" class="settings-secondary-button" id="asr-diagnostics-button">运行自检</button>
               </div>
@@ -599,7 +625,7 @@
               <div class="settings-row settings-row-stack">
                 <div class="settings-row-copy">
                   <span class="settings-row-title">诊断详情</span>
-                  <span class="settings-row-description">可直接复制发给开发者，用于排查模型路径、模式和 GPU 加载问题。</span>
+                  <span class="settings-row-description">可直接复制发给开发者，用于排查识别资源、模式和加速加载问题。</span>
                 </div>
                 <div class="settings-row-control settings-textarea-wrap">
                   <textarea id="asr-diagnostics-output" rows="8" readonly placeholder="运行 ASR 自检后会在这里显示详细结果。"></textarea>
@@ -623,14 +649,16 @@
             <section class="settings-group">
               <div class="settings-group-heading">
                 <h3>帮助中心</h3>
-                <p>当前版本重点是"按一下开始录音，再按一下开始转写，成功后自动回填"。</p>
+                <p>按一下开始录音，再按一下完成转写；能自动回填就直接进输入框，失败时结果仍在剪贴板。</p>
               </div>
 
               <div class="settings-copy-block">
-                <p>1. Windows 语音输入可用 <strong>Ctrl+/</strong> 或 <strong>F8</strong>，翻译可用 <strong>Ctrl+.</strong> 或 <strong>F9</strong>。</p>
-                <p>2. 按一下开始录音，再按一下开始转写。</p>
-                <p>3. 识别完成后会先写入剪贴板，再尝试自动回填到之前的输入框。</p>
-                <p>4. 如果快捷键没有反应，优先检查对应系统权限；如果不会自动回填，优先检查辅助功能权限。</p>
+                <p><strong>快速开始：</strong>Windows 语音输入可用 <strong>Ctrl+/</strong> 或 <strong>F8</strong>，翻译可用 <strong>Ctrl+.</strong> 或 <strong>F9</strong>。先点一下目标输入框，再按快捷键录音。</p>
+                <p><strong>微信回填：</strong>开始录音前让光标停在微信输入框里；如果窗口切走、输入框失焦或系统拦截粘贴，软件会把结果保留到剪贴板。</p>
+                <p><strong>流式和整段：</strong>流式适合边说边出字；整段适合一次说完后再统一补标点、断句和整理。</p>
+                <p><strong>模板起草：</strong>流式 AI 面板可选择通知、会议纪要、工作汇报、微信回复等模板；原文照常输出，整理稿按模板生成。</p>
+                <p><strong>中英混说：</strong>软件会尽量保留 meeting、review、PPT、API、RAG、DeepSeek、Kimi 等英文、缩写、品牌和 AI 术语。</p>
+                <p><strong>隐私注意：</strong>本机识别和本地整理不上传文本；开启非涉密增强时，会按你的 API Key 调用所选服务做整理。</p>
               </div>
             </section>
           </section>

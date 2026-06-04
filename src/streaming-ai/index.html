@@ -14,6 +14,54 @@
           <h1>AI 修正原文与整理稿</h1>
         </div>
         <div class="streaming-ai-actions">
+          <label class="streaming-ai-template">
+            <span>本次模板</span>
+            <select id="streaming-scenario-select">
+              <optgroup label="常用润写">
+                <option value="general">通用整理</option>
+                <option value="meeting_notes">会议纪要</option>
+                <option value="work_report">工作汇报</option>
+                <option value="message_reply">邮件/微信回复</option>
+                <option value="todo_list">待办清单</option>
+                <option value="study_notes">学习笔记</option>
+                <option value="customer_service">客服记录</option>
+              </optgroup>
+              <optgroup label="党政机关公文">
+                <option value="official_resolution">决议</option>
+                <option value="official_decision">决定</option>
+                <option value="official_order">命令（令）</option>
+                <option value="official_communique">公报</option>
+                <option value="official_announcement">公告</option>
+                <option value="official_public_notice">通告</option>
+                <option value="official_opinion">意见</option>
+                <option value="official_notice">通知</option>
+                <option value="official_circular">通报</option>
+                <option value="official_report">报告</option>
+                <option value="official_request">请示</option>
+                <option value="official_reply">批复</option>
+                <option value="official_proposal">议案</option>
+                <option value="official_letter">函</option>
+                <option value="official_minutes">纪要</option>
+              </optgroup>
+              <optgroup label="公司/白领常用">
+                <option value="business_notice">公司通知</option>
+                <option value="business_plan">工作计划</option>
+                <option value="business_summary">工作总结</option>
+                <option value="business_proposal">工作方案</option>
+                <option value="business_email">商务邮件/微信</option>
+                <option value="business_memo">备忘录</option>
+                <option value="business_application">申请/审批说明</option>
+                <option value="business_meeting_minutes">企业会议纪要</option>
+              </optgroup>
+              <optgroup label="学生/校园常用">
+                <option value="student_leave_note">请假条</option>
+                <option value="student_report">实习/实践报告</option>
+                <option value="student_activity_plan">活动策划</option>
+                <option value="student_speech">演讲稿</option>
+                <option value="student_review">学习总结</option>
+              </optgroup>
+            </select>
+          </label>
           <button type="button" class="settings-secondary-button" id="copy-raw-button">复制原文</button>
           <button type="button" class="settings-secondary-button" id="copy-ai-button">复制整理稿</button>
           <button type="button" class="settings-secondary-button" id="clear-button">清空本次记录</button>
@@ -41,7 +89,10 @@
         <article class="streaming-ai-pane">
           <div class="streaming-ai-pane-heading">
             <h2>AI 纠错 / 会议纪要草稿</h2>
-            <span id="ai-count">0 字</span>
+            <div class="streaming-ai-inline-actions">
+              <span id="ai-count">0 字</span>
+              <button type="button" class="settings-secondary-button" id="apply-ai-button">一键带入整理稿</button>
+            </div>
           </div>
           <pre id="ai-text" class="streaming-ai-text empty">检测到停顿后，会在这里生成纠错稿或会议纪要草稿。</pre>
         </article>
@@ -59,10 +110,12 @@
         const aiText = document.querySelector("#ai-text");
         const rawCount = document.querySelector("#raw-count");
         const aiCount = document.querySelector("#ai-count");
+        const scenarioSelect = document.querySelector("#streaming-scenario-select");
         const copyRawButton = document.querySelector("#copy-raw-button");
         const copyAiButton = document.querySelector("#copy-ai-button");
         const clearButton = document.querySelector("#clear-button");
         const applyRefinedRawButton = document.querySelector("#apply-refined-raw-button");
+        const applyAiButton = document.querySelector("#apply-ai-button");
 
         function statusTitleFor(status) {
           switch (status) {
@@ -101,17 +154,21 @@
             ? `最近整理：${new Date(state.last_review_at).toLocaleTimeString()}`
             : "尚未整理";
           const applyText = state.apply_status_text ? ` · ${state.apply_status_text}` : "";
-          statusMeta.textContent = `${state.mode_label || "流式模式"} · ${state.ai_status_label || "等待"} · ${reviewText}${applyText}`;
+          statusMeta.textContent = `${state.mode_label || "流式模式"} · ${state.rewrite_scenario_label || "通用整理"} · ${state.ai_status_label || "等待"} · ${reviewText}${applyText}`;
 
           const refinedRaw = state.refined_raw_text?.trim() ? state.refined_raw_text : state.raw_text;
           renderText(rawText, refinedRaw, "等待 AI 修正原文…");
           renderText(aiText, state.ai_text, "检测到停顿后，会在这里生成纠错稿或会议纪要草稿。");
+          if (scenarioSelect && state.rewrite_scenario && scenarioSelect.value !== state.rewrite_scenario) {
+            scenarioSelect.value = state.rewrite_scenario;
+          }
           rawCount.textContent = `${refinedRaw?.length ?? 0} 字`;
           aiCount.textContent = `${state.ai_text?.length ?? 0} 字`;
           copyRawButton.disabled = !(refinedRaw?.trim());
           copyAiButton.disabled = !(state.ai_text?.trim());
           clearButton.disabled = !(refinedRaw?.trim() || state.ai_text?.trim());
           applyRefinedRawButton.disabled = !(state.can_apply_refined_raw && refinedRaw?.trim());
+          applyAiButton.disabled = !(state.ai_text?.trim());
         }
 
         function renderDisconnected(message) {
@@ -145,6 +202,14 @@
 
         applyRefinedRawButton.addEventListener("click", () => {
           void callAndRender(() => electronAPI.applyStreamingAiRefinedRaw());
+        });
+
+        applyAiButton.addEventListener("click", () => {
+          void callAndRender(() => electronAPI.applyStreamingAiSummary());
+        });
+
+        scenarioSelect.addEventListener("change", () => {
+          void callAndRender(() => electronAPI.setStreamingAiScenario(scenarioSelect.value));
         });
 
         clearButton.addEventListener("click", () => {

@@ -4,7 +4,21 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { clipboard } from 'electron';
 
-export const FOREGROUND_RESTORE_DELAY_MS = 120;
+export const FOREGROUND_RESTORE_DELAY_MS = 220;
+
+export interface PasteOperationResult {
+  ok: boolean;
+  targetAppId?: string | null;
+  foregroundAppId?: string | null;
+  error?: string;
+}
+
+interface WindowsForegroundTarget {
+  hwnd?: string;
+  pid?: string;
+  title?: string;
+  process?: string;
+}
 
 export function createWindowsPasteScript(): string {
   return `
@@ -20,7 +34,9 @@ export function createWindowsPasteScript(): string {
     $VK_CONTROL = 0x11
     $VK_V = 0x56
     [KeySim]::keybd_event($VK_CONTROL, 0, 0, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 20
     [KeySim]::keybd_event($VK_V, 0, 0, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 20
     [KeySim]::keybd_event($VK_V, 0, $KEYEVENTF_KEYUP, [UIntPtr]::Zero)
     [KeySim]::keybd_event($VK_CONTROL, 0, $KEYEVENTF_KEYUP, [UIntPtr]::Zero)
   `;
@@ -29,33 +45,22 @@ export function createWindowsPasteScript(): string {
 export function createWindowsReplaceRecentTextScript(charCount: number): string {
   const safeCharCount = Math.max(0, Math.min(Math.floor(charCount), 20000));
   return `
-    Add-Type -TypeDefinition @"
-    using System;
-    using System.Runtime.InteropServices;
-    public class KeySim {
-      [DllImport("user32.dll")]
-      public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-    }
-"@
-    $KEYEVENTF_KEYUP = 0x0002
-    $VK_SHIFT = 0x10
-    $VK_LEFT = 0x25
-    $VK_CONTROL = 0x11
-    $VK_V = 0x56
     $count = ${safeCharCount}
     if ($count -le 0) {
       exit 1
     }
-    [KeySim]::keybd_event($VK_SHIFT, 0, 0, [UIntPtr]::Zero)
+    $wshell = New-Object -ComObject WScript.Shell
+    Start-Sleep -Milliseconds 80
+    $wshell.SendKeys("^{END}")
+    Start-Sleep -Milliseconds 60
     for ($i = 0; $i -lt $count; $i++) {
-      [KeySim]::keybd_event($VK_LEFT, 0, 0, [UIntPtr]::Zero)
-      [KeySim]::keybd_event($VK_LEFT, 0, $KEYEVENTF_KEYUP, [UIntPtr]::Zero)
+      $wshell.SendKeys("+{LEFT}")
+      if (($i % 32) -eq 0) {
+        Start-Sleep -Milliseconds 1
+      }
     }
-    [KeySim]::keybd_event($VK_SHIFT, 0, $KEYEVENTF_KEYUP, [UIntPtr]::Zero)
-    [KeySim]::keybd_event($VK_CONTROL, 0, 0, [UIntPtr]::Zero)
-    [KeySim]::keybd_event($VK_V, 0, 0, [UIntPtr]::Zero)
-    [KeySim]::keybd_event($VK_V, 0, $KEYEVENTF_KEYUP, [UIntPtr]::Zero)
-    [KeySim]::keybd_event($VK_CONTROL, 0, $KEYEVENTF_KEYUP, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 40
+    $wshell.SendKeys("^v")
   `;
 }
 
@@ -112,9 +117,19 @@ export function createWindowsRestoreForegroundScript(windowHandle: string): stri
       [DllImport("user32.dll")]
       public static extern bool SetForegroundWindow(IntPtr hWnd);
       [DllImport("user32.dll")]
+      public static extern bool BringWindowToTop(IntPtr hWnd);
+      [DllImport("user32.dll")]
       public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
       [DllImport("user32.dll")]
       public static extern bool IsIconic(IntPtr hWnd);
+      [DllImport("user32.dll")]
+      public static extern IntPtr GetForegroundWindow();
+      [DllImport("user32.dll")]
+      public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+      [DllImport("kernel32.dll")]
+      public static extern uint GetCurrentThreadId();
+      [DllImport("user32.dll")]
+      public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
     }
 "@
     $hwnd = [IntPtr]::new(${hwnd})
@@ -126,7 +141,26 @@ export function createWindowsRestoreForegroundScript(windowHandle: string): stri
     } else {
       [WindowRestore]::ShowWindowAsync($hwnd, 5) | Out-Null
     }
+    $currentForeground = [WindowRestore]::GetForegroundWindow()
+    $targetPid = 0
+    $foregroundPid = 0
+    $targetThread = [WindowRestore]::GetWindowThreadProcessId($hwnd, [ref]$targetPid)
+    $foregroundThread = [WindowRestore]::GetWindowThreadProcessId($currentForeground, [ref]$foregroundPid)
+    $currentThread = [WindowRestore]::GetCurrentThreadId()
+    if ($targetThread -gt 0) {
+      [WindowRestore]::AttachThreadInput($currentThread, $targetThread, $true) | Out-Null
+    }
+    if ($foregroundThread -gt 0 -and $foregroundThread -ne $targetThread) {
+      [WindowRestore]::AttachThreadInput($currentThread, $foregroundThread, $true) | Out-Null
+    }
+    [WindowRestore]::BringWindowToTop($hwnd) | Out-Null
     [WindowRestore]::SetForegroundWindow($hwnd) | Out-Null
+    if ($foregroundThread -gt 0 -and $foregroundThread -ne $targetThread) {
+      [WindowRestore]::AttachThreadInput($currentThread, $foregroundThread, $false) | Out-Null
+    }
+    if ($targetThread -gt 0) {
+      [WindowRestore]::AttachThreadInput($currentThread, $targetThread, $false) | Out-Null
+    }
     if (${pid} -gt 0) {
       $wshell = New-Object -ComObject WScript.Shell
       $wshell.AppActivate(${pid}) | Out-Null
@@ -136,6 +170,43 @@ export function createWindowsRestoreForegroundScript(windowHandle: string): stri
 
 export function encodePowerShellCommand(script: string): string {
   return Buffer.from(script, 'utf16le').toString('base64');
+}
+
+function parseWindowsForegroundTarget(value: string | null | undefined): WindowsForegroundTarget | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(value) as WindowsForegroundTarget;
+    return parsed?.hwnd || parsed?.pid ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+export function isSameWindowsForegroundTarget(
+  expected: string | null | undefined,
+  actual: string | null | undefined
+): boolean {
+  const expectedTarget = parseWindowsForegroundTarget(expected);
+  const actualTarget = parseWindowsForegroundTarget(actual);
+  if (!expectedTarget || !actualTarget) {
+    return false;
+  }
+
+  if (expectedTarget.hwnd && actualTarget.hwnd) {
+    if (expectedTarget.hwnd === actualTarget.hwnd) {
+      return true;
+    }
+  }
+
+  if (expectedTarget.pid && actualTarget.pid && expectedTarget.pid === actualTarget.pid) {
+    const expectedProcess = (expectedTarget.process ?? '').toLocaleLowerCase();
+    const actualProcess = (actualTarget.process ?? '').toLocaleLowerCase();
+    return !expectedProcess || !actualProcess || expectedProcess === actualProcess;
+  }
+
+  return false;
 }
 
 export async function runAutoPasteSequence(
@@ -171,32 +242,66 @@ export class AutoPaste {
     }
   }
 
-  async pasteToApp(bundleId?: string | null): Promise<void> {
-    await runAutoPasteSequence(
-      bundleId,
-      (id) => this.restoreForegroundApp(id),
-      () => this.paste()
-    );
+  async pasteToApp(bundleId?: string | null): Promise<PasteOperationResult> {
+    try {
+      if (this.platform === 'win32') {
+        return await this.pasteToWindowsTarget(bundleId);
+      }
+
+      await runAutoPasteSequence(
+        bundleId,
+        (id) => this.restoreForegroundApp(id),
+        () => this.paste()
+      );
+      return { ok: true, targetAppId: bundleId ?? null };
+    } catch (error) {
+      return {
+        ok: false,
+        targetAppId: bundleId ?? null,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   async replaceRecentTextInApp(
     bundleId: string | null | undefined,
     replacementText: string,
     charsToReplace: number
-  ): Promise<void> {
+  ): Promise<PasteOperationResult> {
     await this.writeClipboard(replacementText);
 
     if (this.platform !== 'win32') {
-      throw new Error('一键带入目前仅支持 Windows 自动替换。');
+      return {
+        ok: false,
+        targetAppId: bundleId ?? null,
+        error: '一键带入目前仅支持 Windows 自动替换。',
+      };
     }
 
-    await runAutoPasteSequence(
-      bundleId,
-      (id) => this.restoreForegroundApp(id),
-      async () => {
-        await this.execPowerShell(createWindowsReplaceRecentTextScript(charsToReplace));
+    try {
+      const foregroundResult = await this.restoreAndVerifyWindowsTarget(bundleId);
+      if (!foregroundResult.ok) {
+        return foregroundResult;
       }
-    );
+
+      await this.execPowerShell(createWindowsReplaceRecentTextScript(charsToReplace));
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      const foregroundAppId = await this.captureFrontmostApp();
+      return {
+        ok: !bundleId || isSameWindowsForegroundTarget(bundleId, foregroundAppId),
+        targetAppId: bundleId ?? null,
+        foregroundAppId,
+        error: bundleId && !isSameWindowsForegroundTarget(bundleId, foregroundAppId)
+          ? '目标窗口在替换过程中发生变化。'
+          : undefined,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        targetAppId: bundleId ?? null,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   private async pasteMac(): Promise<void> {
@@ -245,6 +350,49 @@ export class AutoPaste {
     } catch (e) {
       console.error('PowerShell paste error:', e);
       throw e;
+    }
+  }
+
+  private async restoreAndVerifyWindowsTarget(bundleId?: string | null): Promise<PasteOperationResult> {
+    if (!bundleId) {
+      return { ok: true, targetAppId: null };
+    }
+
+    await this.restoreForegroundApp(bundleId);
+    await new Promise((resolve) => setTimeout(resolve, FOREGROUND_RESTORE_DELAY_MS));
+    const foregroundAppId = await this.captureFrontmostApp();
+    const ok = isSameWindowsForegroundTarget(bundleId, foregroundAppId);
+    return {
+      ok,
+      targetAppId: bundleId,
+      foregroundAppId,
+      error: ok ? undefined : '目标窗口未成为前台窗口，已暂停自动回填。',
+    };
+  }
+
+  private async pasteToWindowsTarget(bundleId?: string | null): Promise<PasteOperationResult> {
+    try {
+      const foregroundResult = await this.restoreAndVerifyWindowsTarget(bundleId);
+      if (!foregroundResult.ok) {
+        return foregroundResult;
+      }
+
+      await this.pasteWindows();
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      const foregroundAppId = await this.captureFrontmostApp();
+      const ok = !bundleId || isSameWindowsForegroundTarget(bundleId, foregroundAppId);
+      return {
+        ok,
+        targetAppId: bundleId ?? null,
+        foregroundAppId,
+        error: ok ? undefined : '粘贴后目标窗口发生变化，已停止自动回填。',
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        targetAppId: bundleId ?? null,
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
   }
 

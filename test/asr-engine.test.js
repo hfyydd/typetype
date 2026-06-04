@@ -23,10 +23,19 @@ test("findModelPath keeps streaming and offline model directories separate", (t)
     root,
     "sherpa-onnx-streaming-zipformer-ctc-zh-xlarge-int8"
   );
+  const paraformerDir = path.join(
+    root,
+    "sherpa-onnx-streaming-paraformer-trilingual-zh-cantonese-en"
+  );
   const offlineDir = path.join(
     root,
     "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8"
   );
+
+  fs.mkdirSync(paraformerDir, { recursive: true });
+  fs.writeFileSync(path.join(paraformerDir, "encoder.int8.onnx"), "");
+  fs.writeFileSync(path.join(paraformerDir, "decoder.int8.onnx"), "");
+  fs.writeFileSync(path.join(paraformerDir, "tokens.txt"), "");
 
   fs.mkdirSync(streamingDir, { recursive: true });
   fs.writeFileSync(path.join(streamingDir, "model.int8.onnx"), "");
@@ -44,6 +53,13 @@ test("findModelPath keeps streaming and offline model directories separate", (t)
 
   const streamingModel = AsrEngine.findModelPath([root], "streaming_output");
   assert.ok(streamingModel);
-  assert.match(streamingModel.modelPath, /streaming-zipformer/);
-  assert.equal(path.basename(streamingModel.bpeVocabPath), "bpe.model");
+  assert.match(streamingModel.modelPath, /streaming-paraformer/);
+  assert.match(streamingModel.encoderPath, /encoder\.int8\.onnx/);
+  assert.match(streamingModel.decoderPath, /decoder\.int8\.onnx/);
+  assert.equal(streamingModel.bpeVocabPath, null);
+
+  const chineseRealtimeModel = AsrEngine.findModelPath([streamingDir], "streaming_output");
+  assert.ok(chineseRealtimeModel);
+  assert.match(chineseRealtimeModel.modelPath, /streaming-zipformer/);
+  assert.equal(path.basename(chineseRealtimeModel.bpeVocabPath), "bpe.model");
 });

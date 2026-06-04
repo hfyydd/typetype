@@ -80,6 +80,25 @@ body {
   gap: 8px;
 }
 
+.streaming-ai-template {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.streaming-ai-template select {
+  min-width: 150px;
+  height: 36px;
+  border: 1px solid rgba(24, 33, 43, 0.14);
+  border-radius: 8px;
+  background: #ffffff;
+  color: var(--text);
+  padding: 0 10px;
+  font: inherit;
+}
+
 .streaming-ai-status {
   border: 1px solid rgba(24, 33, 43, 0.1);
   border-radius: 8px;

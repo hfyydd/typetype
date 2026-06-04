@@ -10,6 +10,7 @@ import {
   DictionaryImportRequest,
   DictionaryViewData,
   StreamingAiPanelState,
+  RewriteScenario,
 } from './types';
 
 export function registerIpcHandlers(
@@ -42,7 +43,9 @@ export function registerIpcHandlers(
   clearStreamingAiPanel: () => StreamingAiPanelState,
   copyStreamingAiRaw: () => StreamingAiPanelState,
   copyStreamingAiSummary: () => StreamingAiPanelState,
-  applyStreamingAiRefinedRaw: () => Promise<StreamingAiPanelState> | StreamingAiPanelState
+  applyStreamingAiRefinedRaw: () => Promise<StreamingAiPanelState> | StreamingAiPanelState,
+  applyStreamingAiSummary: () => Promise<StreamingAiPanelState> | StreamingAiPanelState,
+  setStreamingAiScenario: (scenario: RewriteScenario) => StreamingAiPanelState
 ): void {
   ipcMain.handle('get_snapshot', () => getSnapshot());
   ipcMain.handle('get_settings_view_data', () => getSettingsViewData());
@@ -74,4 +77,6 @@ export function registerIpcHandlers(
   ipcMain.handle('copy_streaming_ai_raw', () => copyStreamingAiRaw());
   ipcMain.handle('copy_streaming_ai_summary', () => copyStreamingAiSummary());
   ipcMain.handle('apply_streaming_ai_refined_raw', () => applyStreamingAiRefinedRaw());
+  ipcMain.handle('apply_streaming_ai_summary', () => applyStreamingAiSummary());
+  ipcMain.handle('set_streaming_ai_scenario', (_event, scenario) => setStreamingAiScenario(scenario));
 }

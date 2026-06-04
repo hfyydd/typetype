@@ -48,3 +48,18 @@ AI修正原文：
   assert.equal(parsed.summaryText.includes("一、会议要点"), true);
   assert.equal(parsed.summaryText.includes("张三负责测试。"), true);
 });
+
+test("streaming AI sanitizer removes ASR unknown tokens from refined and summary text", () => {
+  const parsed = parseStreamingAiResult(`
+AI修正原文：
+<unk>大家好，我是小明，今天早上吃了一个 BREAKFAST，现在我要 <unk>Go TO SLEEP<unk>。你们准备好了吗？
+
+整理稿：
+<unk>大家好，我是小明，今天早上吃了一个 BREAKFAST，现在我要 Go TO SLEEP。你们准备好了吗？
+`, "<unk>大家好");
+
+  assert.equal(parsed.refinedRawText.includes("<unk>"), false);
+  assert.equal(parsed.summaryText.includes("<unk>"), false);
+  assert.equal(parsed.refinedRawText.includes("大家好，我是小明"), true);
+  assert.equal(parsed.summaryText.includes("Go TO SLEEP"), true);
+});

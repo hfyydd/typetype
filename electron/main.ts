@@ -40,10 +40,11 @@ import {
   DictionaryViewData,
   PreloadStatusView,
   StreamingAiPanelState,
+  RewriteScenario,
 } from './types';
 import { getAvailableMicrophones } from './microphones';
 import { initializeAsrEngine } from './asr-bootstrap';
-import { cleanupTranscript } from './transcript-cleanup';
+import { cleanupTranscript, stripUnknownTokens } from './transcript-cleanup';
 import { TranslationEngine } from './translation-engine';
 import {
   getTranslationLanguageDefinition,
@@ -63,6 +64,10 @@ import { parseStreamingAiResult, sanitizeStreamingAiText } from './streaming-ai-
 import { buildLocalRewritePromptContext, LocalChineseRewriteResult, rewriteChineseLocally } from './local-chinese-rewrite';
 import { LocalPunctuationEngine } from './local-punctuation-engine';
 import { RollingAudioCache } from './streaming-audio-cache';
+import { TextInsertionTransaction } from './text-insertion-transaction';
+import { CodeSwitchLexicon } from './code-switch-lexicon';
+import { AiRewriteGate } from './ai-rewrite-gate';
+import { SemanticPunctuationEngine } from './semantic-punctuation-engine';
 
 const FEEDBACK_EMAIL = 'feedback@typetype.app';
 const WINDOWS_LOGIN_ITEM_NAME = 'typetype';
@@ -109,6 +114,7 @@ class TypenewApp {
   private asrInitializationPromise: Promise<void> | null = null;
   private asrInitializationError: Error | null = null;
   private isAsrInitializing = false;
+  private asrInitializationGeneration = 0;
   private pendingTranscriptionTimer: ReturnType<typeof setTimeout> | null = null;
   private transcriptionRunId = 0;
   private stopOverlayTimer: ReturnType<typeof setTimeout> | null = null;
@@ -124,11 +130,13 @@ class TypenewApp {
   private recordingStopAllowedAt = 0;
   private streamingPastedText = '';
   private streamingPastedSourceText = '';
+  private streamingInsertionTransaction: TextInsertionTransaction;
   private streamingOutputText = '';
   private streamingLatestText = '';
   private streamingChunkQueue: Promise<void> = Promise.resolve();
   private streamingPastePendingText = '';
   private streamingPasteInFlight = false;
+  private streamingAutoPasteSuspended = false;
   private streamingSessionId = 0;
   private streamingChunkLogCount = 0;
   private streamingSegmenter: StreamingSegmenter | null = null;
@@ -140,6 +148,8 @@ class TypenewApp {
     active: false,
     status: 'idle',
     status_text: '流式 AI 整理面板未开启。',
+    rewrite_scenario: 'general',
+    rewrite_scenario_label: '通用整理',
     raw_text: '',
     refined_raw_text: '',
     ai_text: '',
@@ -157,18 +167,23 @@ class TypenewApp {
   private streamingAiPendingFinal = false;
   private streamingAiLastRequestAt = 0;
   private streamingAiLastSubmittedText = '';
+  private streamingRewriteScenario: RewriteScenario = 'general';
   private streamingPanelPublishTimer: ReturnType<typeof setTimeout> | null = null;
   private preloadStatus: PreloadStatusView = defaultPreloadStatus();
   private activeCaptureIntent: CaptureIntent = 'dictation';
   private translationEngine: TranslationEngine;
   private dictionaryStore: DictionaryStore;
+  private codeSwitchLexicon: CodeSwitchLexicon;
+  private aiRewriteGate: AiRewriteGate;
   private localPunctuationEngine: LocalPunctuationEngine;
+  private semanticPunctuationEngine: SemanticPunctuationEngine;
   private shortcutWatchdogTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     this.settingsStore = new SettingsStore();
     this.stateMachine = new StateMachine(this.settingsStore.getSettings());
     this.autoPaste = new AutoPaste();
+    this.streamingInsertionTransaction = new TextInsertionTransaction(this.autoPaste);
     this.trayManager = new TrayManager(this.getResourcesPath());
     this.shortcutManager = new ShortcutManager();
     this.dictionaryStore = new DictionaryStore({
@@ -176,11 +191,16 @@ class TypenewApp {
       resourcesPath: this.getResourcesPath(),
       legacyCustomDictionary: this.settingsStore.getSettings().custom_dictionary,
     });
+    this.codeSwitchLexicon = new CodeSwitchLexicon({
+      dataDir: this.getDataDir(),
+      resourcesPath: this.getResourcesPath(),
+    });
+    this.aiRewriteGate = new AiRewriteGate();
     const dictionaryStats = this.dictionaryStore.getViewData().stats;
     this.preloadStatus.dictionary = {
       status: 'ready',
       label: '词典索引',
-      detail: `个人词典 ${dictionaryStats.total} 条，系统词库 ${dictionaryStats.system_terms} 条已加载。`,
+      detail: `个人词典 ${dictionaryStats.total} 条，系统词库 ${dictionaryStats.system_terms} 条，混输词库 ${this.codeSwitchLexicon.getEntryCount()} 条已加载。`,
     };
     this.preloadStatus.llm = this.getLlmPreloadStatus(this.settingsStore.getSettings());
     this.translationEngine = new TranslationEngine({
@@ -193,6 +213,10 @@ class TypenewApp {
       processResourcesPath: process.resourcesPath,
       appPath: app.getAppPath(),
     });
+    this.semanticPunctuationEngine = new SemanticPunctuationEngine(
+      this.localPunctuationEngine,
+      this.codeSwitchLexicon
+    );
 
     this.setupApp();
   }
@@ -396,7 +420,9 @@ class TypenewApp {
       () => this.clearStreamingAiPanel(),
       () => this.copyStreamingAiRaw(),
       () => this.copyStreamingAiSummary(),
-      () => this.applyStreamingAiRefinedRaw()
+      () => this.applyStreamingAiRefinedRaw(),
+      () => this.applyStreamingAiSummary(),
+      (scenario) => this.setStreamingAiScenario(scenario)
     );
   }
 
@@ -591,6 +617,8 @@ class TypenewApp {
       active: false,
       status: 'idle',
       status_text: '已清空本次流式记录。',
+      rewrite_scenario: this.streamingRewriteScenario,
+      rewrite_scenario_label: getRewriteScenarioLabel(this.streamingRewriteScenario),
       raw_text: '',
       refined_raw_text: '',
       ai_text: '',
@@ -598,6 +626,33 @@ class TypenewApp {
       apply_status_text: null,
       last_error: null,
     }, { immediate: true });
+    return this.getStreamingAiPanelState();
+  }
+
+  private setStreamingAiScenario(scenario: RewriteScenario): StreamingAiPanelState {
+    this.streamingRewriteScenario = scenario || 'general';
+    const settings = this.getStreamingRewriteSettings(this.settingsStore.getSettings());
+    const rawText = this.streamingAiState.raw_text || this.streamingLatestText || this.streamingOutputText;
+    const localRewrite = rawText ? this.buildLocalChineseRewrite(rawText, settings, false) : null;
+    this.patchStreamingAiPanelState({
+      rewrite_scenario: this.streamingRewriteScenario,
+      rewrite_scenario_label: getRewriteScenarioLabel(this.streamingRewriteScenario),
+      refined_raw_text: localRewrite
+        ? sanitizeStreamingAiText(localRewrite.refinedRawText) || rawText
+        : this.streamingAiState.refined_raw_text,
+      ai_text: localRewrite
+        ? sanitizeStreamingAiText(localRewrite.structuredText)
+        : this.streamingAiState.ai_text,
+      status_text: rawText
+        ? `已切换为${getRewriteScenarioLabel(this.streamingRewriteScenario)}模板，并重新整理本次内容。`
+        : `已切换为${getRewriteScenarioLabel(this.streamingRewriteScenario)}模板。`,
+      last_error: null,
+    }, { immediate: true });
+
+    if (rawText) {
+      this.queueStreamingAiReview(rawText, settings, false);
+    }
+
     return this.getStreamingAiPanelState();
   }
 
@@ -624,9 +679,7 @@ class TypenewApp {
       return this.getStreamingAiPanelState();
     }
 
-    const targetText = this.streamingPastedText || this.streamingOutputText || this.streamingAiState.raw_text || '';
-    const charsToReplace = Array.from(targetText).length;
-    if (!charsToReplace) {
+    if (!this.streamingInsertionTransaction.hasInsertedText()) {
       await this.autoPaste.writeClipboard(refinedText);
       this.patchStreamingAiPanelState({
         apply_status_text: '光标处没有检测到本次流式原文，已复制 AI 修正原文，请手动粘贴。',
@@ -635,10 +688,16 @@ class TypenewApp {
       return this.getStreamingAiPanelState();
     }
 
-    try {
-      await this.autoPaste.replaceRecentTextInApp(this.previousAppBundleId, refinedText, charsToReplace);
+    const replaceResult = await this.streamingInsertionTransaction.replaceInsertedText(
+      refinedText,
+      this.previousAppBundleId,
+      { respectExternalClipboardChange: false }
+    );
+
+    if (replaceResult.status === 'replaced') {
       this.streamingPastedText = refinedText;
       this.streamingOutputText = refinedText;
+      this.streamingPastedSourceText = refinedText;
       this.streamingPendingBoundaryPunctuation = false;
       this.patchStreamingAiPanelState({
         refined_raw_text: refinedText,
@@ -647,15 +706,75 @@ class TypenewApp {
         status_text: 'AI 修正原文已带入，后续语音会继续追加。',
         last_error: null,
       }, { immediate: true });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      await this.autoPaste.writeClipboard(refinedText);
+    } else {
+      if (replaceResult.status !== 'clipboard_changed') {
+        await this.autoPaste.writeClipboard(refinedText);
+      }
       this.patchStreamingAiPanelState({
-        apply_status_text: '目标窗口无法自动替换，已复制 AI 修正原文，请手动粘贴。',
-        status_text: '自动带入失败，已复制到剪贴板。',
-        last_error: message,
+        apply_status_text: replaceResult.status === 'target_changed'
+          ? '目标窗口已变化，未自动带入；AI 修正原文已复制，请手动粘贴。'
+          : replaceResult.status === 'clipboard_changed'
+            ? '检测到剪贴板已有新内容，未自动带入；可使用复制按钮取回 AI 修正原文。'
+            : '目标窗口无法自动替换，已复制 AI 修正原文，请手动粘贴。',
+        status_text: replaceResult.status === 'clipboard_changed'
+          ? '自动带入已暂停，避免覆盖新的剪贴板内容。'
+          : '自动带入失败，已复制到剪贴板。',
+        last_error: replaceResult.error ?? replaceResult.status,
       }, { immediate: true });
     }
+    return this.getStreamingAiPanelState();
+  }
+
+  private async applyStreamingAiSummary(): Promise<StreamingAiPanelState> {
+    const summaryText = sanitizeStreamingAiText(this.streamingAiState.ai_text || '');
+    if (!summaryText) {
+      this.patchStreamingAiPanelState({
+        apply_status_text: '没有可带入的整理稿。',
+      }, { immediate: true });
+      return this.getStreamingAiPanelState();
+    }
+
+    if (!this.streamingInsertionTransaction.hasInsertedText()) {
+      await this.autoPaste.writeClipboard(summaryText);
+      const pasteResult = await this.autoPaste.pasteToApp(this.previousAppBundleId);
+      this.patchStreamingAiPanelState({
+        apply_status_text: pasteResult.ok
+          ? '整理稿已带入到光标处。'
+          : '整理稿已复制到剪贴板，请手动粘贴。',
+        status_text: pasteResult.ok
+          ? '整理稿已带入。'
+          : '目标输入框未接住整理稿，已复制到剪贴板。',
+        last_error: pasteResult.ok ? null : pasteResult.error ?? 'paste_summary_failed',
+      }, { immediate: true });
+      return this.getStreamingAiPanelState();
+    }
+
+    const replaceResult = await this.streamingInsertionTransaction.replaceInsertedText(
+      summaryText,
+      this.previousAppBundleId,
+      { respectExternalClipboardChange: false }
+    );
+
+    if (replaceResult.status === 'replaced') {
+      this.streamingPastedText = summaryText;
+      this.streamingOutputText = summaryText;
+      this.streamingPastedSourceText = summaryText;
+      this.streamingPendingBoundaryPunctuation = false;
+      this.patchStreamingAiPanelState({
+        can_apply_refined_raw: true,
+        apply_status_text: '已将整理稿带入到光标处。',
+        status_text: '整理稿已带入。',
+        last_error: null,
+      }, { immediate: true });
+    } else {
+      await this.autoPaste.writeClipboard(summaryText);
+      this.patchStreamingAiPanelState({
+        apply_status_text: '目标输入框无法自动替换，整理稿已复制到剪贴板。',
+        status_text: '整理稿带入失败，请手动粘贴。',
+        last_error: replaceResult.error ?? replaceResult.status,
+      }, { immediate: true });
+    }
+
     return this.getStreamingAiPanelState();
   }
 
@@ -898,6 +1017,7 @@ class TypenewApp {
   }
 
   private primeAsrEngine(): void {
+    const generation = ++this.asrInitializationGeneration;
     this.asrInitializationError = null;
     this.isAsrInitializing = true;
     this.preloadStatus.asr = {
@@ -906,17 +1026,23 @@ class TypenewApp {
       detail: '正在后台预热识别引擎。',
     };
     this.publishSettingsViewData();
-    this.asrInitializationPromise = this.initializeAsrEngine().catch((error) => {
+    this.asrInitializationPromise = this.initializeAsrEngine(generation).catch((error) => {
+      if (generation !== this.asrInitializationGeneration) {
+        return;
+      }
       console.error('Failed to initialize ASR engine:', error);
       this.asrInitializationError = error instanceof Error ? error : new Error(String(error));
       this.asrEngine = null;
     }).finally(() => {
+      if (generation !== this.asrInitializationGeneration) {
+        return;
+      }
       this.isAsrInitializing = false;
       this.preloadStatus.asr = this.asrEngine
         ? {
           status: 'ready',
           label: '识别引擎',
-          detail: `${this.asrEngine.getRuntimeLabel()}，可直接录音。`,
+          detail: `${this.getAsrModelStatusLabel()}，可直接录音。`,
         }
         : {
           status: 'error',
@@ -983,7 +1109,7 @@ class TypenewApp {
         ? {
           status: 'ready',
           label: '翻译资源',
-          detail: '本地 HY-MT2 翻译模型和运行时已就绪。',
+          detail: '本机翻译资源和运行时已就绪。',
         }
         : {
           status: 'error',
@@ -1024,7 +1150,7 @@ class TypenewApp {
       label: 'LLM 配置',
       detail: hasBaseUrl && hasModel
         ? `已配置 ${settings.llm_rewrite.model}，未主动消耗 API 额度。`
-        : 'Base URL 或模型名为空，请重新选择大模型厂家。',
+        : '服务地址或服务参数为空，请重新选择大模型厂家。',
     };
   }
 
@@ -1036,18 +1162,22 @@ class TypenewApp {
     await this.asrInitializationPromise;
   }
 
-  private async initializeAsrEngine(): Promise<void> {
-    this.asrEngine = await initializeAsrEngine({
+  private async initializeAsrEngine(generation = this.asrInitializationGeneration): Promise<void> {
+    const engine = await initializeAsrEngine({
       dataDir: this.getDataDir(),
       settings: this.settingsStore.getSettings(),
       processResourcesPath: process.resourcesPath,
       appPath: app.getAppPath(),
     });
+    if (generation !== this.asrInitializationGeneration) {
+      engine?.destroy();
+      return;
+    }
+    this.asrEngine = engine;
     if (this.asrEngine) {
       console.log('ASR engine initialized', {
-        runtime: this.asrEngine.getRuntimeLabel(),
-        modelPath: this.asrEngine.getModelPath(),
-        modelDirectory: this.asrEngine.getModelDirectory(),
+        runtime: this.getAsrModelStatusLabel(),
+        model_loaded: Boolean(this.asrEngine.getModelPath()),
       });
     } else {
       console.warn('ASR engine is not configured for current settings');
@@ -1134,8 +1264,25 @@ class TypenewApp {
     }
   }
 
+  private getStreamingModeLabel(settings: Settings): string {
+    return `${this.getStreamingModelLabel(settings)} · ${this.getStreamingEnhancementModeLabel(settings)}`;
+  }
+
   private getStreamingModelLabel(settings: Settings): string {
-    return '高精度流式识别引擎';
+    switch (settings.streaming_model) {
+      case 'multilingual_segmented':
+        return '多语分段流式';
+      case 'zh_high_accuracy_realtime':
+        return '中文高精度流式';
+      default:
+        return '多语实时流式';
+    }
+  }
+
+  private getVoicePackageLabel(settings: Settings): string {
+    return settings.voice_package === 'pro_high_accuracy'
+      ? '增强本机识别'
+      : '标准本机识别';
   }
 
   private getSettingsViewData(): SettingsViewData {
@@ -1149,16 +1296,16 @@ class TypenewApp {
       app_version: app.getVersion(),
       platform_label: platformLabel,
       runtime_mode_label: settings.recognition_mode === 'streaming_output'
-        ? `流式输出 · ${this.getStreamingEnhancementModeLabel(settings)}`
-        : '非流式',
+        ? `流式输出 · ${this.getStreamingModeLabel(settings)}`
+        : `整段识别 · ${this.getVoicePackageLabel(settings)}`,
       model_label: settings.recognition_mode === 'streaming_output'
         ? this.getStreamingModelLabel(settings)
-        : (settings.pinned_model_version || 'sherpa-onnx-sense-voice'),
+        : this.getVoicePackageLabel(settings),
       model_status: this.getAsrModelStatusLabel(),
       model_path_label: this.asrEngine?.getModelDirectory() || 'not configured',
       compute_backend_label: this.asrEngine
         ? this.describeProvider(this.asrEngine.getActiveProvider())
-        : 'not configured',
+        : '未配置',
       log_path: getLogFilePath(),
       show_permissions_panel: process.platform === 'darwin',
       show_microphone_settings: true,
@@ -1172,11 +1319,12 @@ class TypenewApp {
   }
 
   private async saveSettings(settings: Settings): Promise<UiSnapshot> {
-    this.registerShortcutsForSettings(settings, 'settings-save');
-    this.startShortcutWatchdog();
     this.settingsStore.saveSettings(settings);
-    this.stateMachine.applySettings(settings);
-    this.applyLoginItemSettings(settings);
+    const normalizedSettings = this.settingsStore.getSettings();
+    this.registerShortcutsForSettings(normalizedSettings, 'settings-save');
+    this.startShortcutWatchdog();
+    this.stateMachine.applySettings(normalizedSettings);
+    this.applyLoginItemSettings(normalizedSettings);
     this.asrEngine = null;
     this.translationAsrEngine = null;
     this.translationAsrInitializationPromise = null;
@@ -1241,11 +1389,11 @@ class TypenewApp {
   private async runAsrDiagnostics(): Promise<AsrDiagnostics> {
     const settings = this.settingsStore.getSettings();
     const mode = settings.recognition_mode === 'streaming_output'
-      ? `流式输出 · ${this.getStreamingEnhancementModeLabel(settings)}`
-      : '非流式';
+      ? `流式输出 · ${this.getStreamingModeLabel(settings)}`
+      : `整段识别 · ${this.getVoicePackageLabel(settings)}`;
     const modelLabel = settings.recognition_mode === 'streaming_output'
       ? this.getStreamingModelLabel(settings)
-      : (settings.pinned_model_version || 'sherpa-onnx-sense-voice');
+      : this.getVoicePackageLabel(settings);
 
     try {
       const engine = await initializeAsrEngine({
@@ -1260,9 +1408,9 @@ class TypenewApp {
           ok: false,
           mode,
           model_label: modelLabel,
-          model_path: 'not configured',
-          backend: 'not configured',
-          runtime: 'not configured',
+          model_path: '未加载',
+          backend: '未配置',
+          runtime: '未配置',
           message: '没有找到匹配的模型目录或配置',
         };
       }
@@ -1271,9 +1419,9 @@ class TypenewApp {
         ok: true,
         mode,
         model_label: modelLabel,
-        model_path: engine.getModelDirectory() || 'not configured',
+        model_path: engine.getModelDirectory() ? '已加载可用资源' : '未加载',
         backend: this.describeProvider(engine.getActiveProvider()),
-        runtime: engine.getRuntimeLabel(),
+        runtime: `已就绪 · ${this.describeProvider(engine.getActiveProvider())}`,
         message: '模型可加载，当前配置有效',
       };
     } catch (error) {
@@ -1283,11 +1431,45 @@ class TypenewApp {
         ok: false,
         mode,
         model_label: modelLabel,
-        model_path: this.asrEngine?.getModelDirectory() || 'not configured',
-        backend: this.asrEngine ? this.describeProvider(this.asrEngine.getActiveProvider()) : 'not configured',
-        runtime: this.asrEngine?.getRuntimeLabel() || 'not configured',
+        model_path: this.asrEngine?.getModelDirectory() ? '已加载可用资源' : '未加载',
+        backend: this.asrEngine ? this.describeProvider(this.asrEngine.getActiveProvider()) : '未配置',
+        runtime: this.asrEngine ? `已就绪 · ${this.describeProvider(this.asrEngine.getActiveProvider())}` : '未配置',
         message,
       };
+    }
+  }
+
+  private async captureOutputTarget(): Promise<string | null> {
+    try {
+      const target = await this.autoPaste.captureFrontmostApp();
+      if (this.isTypetypeWindowTarget(target)) {
+        console.warn('Ignoring typetype window as auto-paste target');
+        return null;
+      }
+      return target;
+    } catch (error) {
+      console.warn('Failed to capture output target:', error);
+      return null;
+    }
+  }
+
+  private isTypetypeWindowTarget(target: string | null): boolean {
+    if (!target) {
+      return false;
+    }
+    try {
+      const parsed = JSON.parse(target) as { process?: string; title?: string };
+      const processName = (parsed.process ?? '').toLowerCase();
+      const title = (parsed.title ?? '').toLowerCase();
+      return (
+        processName.includes('typetype')
+        || title.includes('typetype')
+        || title.includes('type type')
+        || title.includes('ai 整理')
+        || title.includes('typetype 设置')
+      );
+    } catch {
+      return false;
     }
   }
 
@@ -1296,13 +1478,8 @@ class TypenewApp {
       return;
     }
 
-    // Capture frontmost app asynchronously - don't block recording start
     this.activeCaptureIntent = intent;
-    void this.autoPaste.captureFrontmostApp().then((bundleId) => {
-      this.previousAppBundleId = bundleId;
-    }).catch(() => {
-      // Ignore capture errors - use whatever previousAppBundleId we already have
-    });
+    this.previousAppBundleId = await this.captureOutputTarget();
 
     try {
       const settings = this.settingsStore.getSettings();
@@ -1310,11 +1487,13 @@ class TypenewApp {
       this.streamingChunkLogCount = 0;
       this.streamingPastedText = '';
       this.streamingPastedSourceText = '';
+      this.streamingInsertionTransaction.reset(this.previousAppBundleId);
       this.streamingOutputText = '';
       this.streamingLatestText = '';
       this.streamingChunkQueue = Promise.resolve();
       this.streamingPastePendingText = '';
       this.streamingPasteInFlight = false;
+      this.streamingAutoPasteSuspended = false;
       this.streamingPendingBoundaryPunctuation = false;
       this.streamingLastPasteAt = 0;
       this.streamingSegmenter = null;
@@ -1333,9 +1512,14 @@ class TypenewApp {
         if (!this.asrEngine) {
           throw this.asrInitializationError ?? new Error('ASR engine not initialized');
         }
-        this.asrEngine.startStreamingSession();
+        if (!this.isActiveSegmentedStreamingMode(settings)) {
+          this.asrEngine.startStreamingSession();
+        }
         this.streamingSegmenter = new StreamingSegmenter();
-        console.log('Streaming ASR session started');
+        console.log('Streaming ASR session started', {
+          streaming_model: settings.streaming_model,
+          segmented: this.isActiveSegmentedStreamingMode(settings),
+        });
       }
 
       if (process.platform === 'win32') {
@@ -1502,7 +1686,8 @@ class TypenewApp {
         throw new Error('ASR engine not initialized');
       }
 
-      const text = await engine.transcribe(samples);
+      const asrResult = await engine.transcribeRich(samples);
+      const text = asrResult.text;
 
       if (!this.isCurrentTranscriptionRun(runId)) {
         return;
@@ -1526,9 +1711,11 @@ class TypenewApp {
         return;
       }
 
-      console.log('[translation-debug] transcript', {
+      console.log('[translation-debug] transcript-ready', {
         intent: this.activeCaptureIntent,
-        text: cleanedTranscript,
+        text_length: cleanedTranscript.length,
+        language: asrResult.language,
+        confidence: asrResult.confidence,
       });
 
       let finalText: string;
@@ -1536,15 +1723,29 @@ class TypenewApp {
         finalText = await this.translateTranscript(cleanedTranscript);
       } else {
         const localFallback = await this.buildModelAssistedLocalChineseRewrite(cleanedTranscript, settings, true);
-        finalText = await this.rewriteWithLlm(cleanedTranscript)
+        const gateDecision = this.aiRewriteGate.decide({
+          text: cleanedTranscript,
+          settings,
+          codeSwitch: this.codeSwitchLexicon.analyzeText(cleanedTranscript),
+          final: true,
+        });
+        console.log('[ai-rewrite-gate] non-streaming decision', {
+          should_run: gateDecision.shouldRun,
+          reasons: gateDecision.reasons,
+          text_length: cleanedTranscript.length,
+        });
+        const aiRewrite = gateDecision.shouldRun
+          ? await this.rewriteWithLlm(cleanedTranscript)
+          : null;
+        finalText = aiRewrite
           || localFallback.rewrite.refinedRawText
           || this.applyFallbackPunctuation(cleanedTranscript, settings);
         finalText = this.stateMachine.finishOutput(finalText);
       }
       this.autoLearnFromTranscript(`${cleanedTranscript}\n${finalText}`, settings);
-      console.log('[translation-debug] final-output', {
+      console.log('[translation-debug] final-output-ready', {
         intent: this.activeCaptureIntent,
-        text: finalText,
+        text_length: finalText.length,
       });
       console.log('Transcription complete', createTranscriptionLogMeta(finalText));
 
@@ -1581,12 +1782,30 @@ class TypenewApp {
     }
 
     this.hideOverlayWindow();
-    await this.autoPaste.pasteToApp(this.previousAppBundleId);
-    this.stateMachine.markAutoPasteSuccess();
+    const pasteResult = await this.autoPaste.pasteToApp(this.previousAppBundleId);
+    if (pasteResult.ok) {
+      this.stateMachine.markAutoPasteSuccess();
+    } else {
+      console.warn('Auto paste failed; transcript remains on clipboard', {
+        error: pasteResult.error,
+        target: pasteResult.targetAppId,
+        foreground: pasteResult.foregroundAppId,
+      });
+    }
   }
 
   private isStreamingOutputMode(): boolean {
     return this.settingsStore.getSettings().recognition_mode === 'streaming_output';
+  }
+
+  private isSegmentedStreamingMode(settings: Settings = this.settingsStore.getSettings()): boolean {
+    return settings.recognition_mode === 'streaming_output'
+      && settings.streaming_model === 'multilingual_segmented';
+  }
+
+  private isActiveSegmentedStreamingMode(settings: Settings = this.settingsStore.getSettings()): boolean {
+    return this.isSegmentedStreamingMode(settings)
+      && this.asrEngine?.getRecognitionMode() === 'non_streaming';
   }
 
   private shouldUseStreamingForIntent(intent: CaptureIntent): boolean {
@@ -1653,13 +1872,16 @@ class TypenewApp {
     console.log('[translation-debug] translate-start', {
       target_language: settings.translation_target_language,
       target_label: language.label,
-      transcript,
+      transcript_length: transcript.length,
     });
 
     const translated = await this.translationEngine.translate(
       transcript,
       settings.translation_target_language,
-      this.dictionaryStore.getMatchedTerms(transcript, 30)
+      [
+        ...this.dictionaryStore.getMatchedTerms(transcript, 30),
+        ...this.codeSwitchLexicon.getMatchedTerms(transcript, 30),
+      ]
     );
     if (!translated) {
       throw new Error(`本地翻译没有返回 ${language.label} 文本。`);
@@ -1667,7 +1889,7 @@ class TypenewApp {
 
     console.log('[translation-debug] translate-result', {
       target_language: settings.translation_target_language,
-      text: translated,
+      text_length: translated.length,
     });
 
     return this.stateMachine.finishOutput(translated);
@@ -1680,7 +1902,8 @@ class TypenewApp {
   ): string {
     const cleaned = cleanupTranscript(text, settings);
     const dictionaryApplied = this.dictionaryStore.applyToText(cleaned, options);
-    return applyVoiceFormattingCommands(dictionaryApplied, {
+    const codeSwitchApplied = this.codeSwitchLexicon.applyToText(dictionaryApplied, options).text;
+    return applyVoiceFormattingCommands(codeSwitchApplied, {
       partial: options.partial,
       enabled: settings.voice_formatting_enabled,
     }).trim();
@@ -1699,16 +1922,25 @@ class TypenewApp {
     return applyBasicTranscriptPunctuation(text);
   }
 
+  private getStreamingRewriteSettings(settings: Settings): Settings {
+    return {
+      ...settings,
+      rewrite_scenario: this.streamingRewriteScenario || settings.rewrite_scenario || 'general',
+    };
+  }
+
   private buildLocalChineseRewrite(
     text: string,
     settings: Settings,
     final = false
   ): LocalChineseRewriteResult {
-    const dictionaryTerms = this.dictionaryStore.getMatchedTerms(text, 60);
+    const cleanText = stripUnknownTokens(text);
+    const dictionaryTerms = this.dictionaryStore.getMatchedTerms(cleanText, 60);
+    const codeSwitchTerms = this.codeSwitchLexicon.getMatchedTerms(cleanText, 60);
     return rewriteChineseLocally({
-      rawText: text,
+      rawText: cleanText,
       scenario: settings.rewrite_scenario,
-      preserveTerms: dictionaryTerms,
+      preserveTerms: [...dictionaryTerms, ...codeSwitchTerms],
       final,
     });
   }
@@ -1723,21 +1955,23 @@ class TypenewApp {
     statusText: string;
     error?: string;
   }> {
-    const fallbackRewrite = this.buildLocalChineseRewrite(text, settings, final);
-    const punctuationResult = await this.localPunctuationEngine.restorePunctuation(text, {
+    const cleanText = stripUnknownTokens(text);
+    const fallbackRewrite = this.buildLocalChineseRewrite(cleanText, settings, final);
+    const punctuationResult = await this.semanticPunctuationEngine.restorePunctuation(cleanText, {
       final,
       preserveTerms: fallbackRewrite.preserveTerms,
     });
+    const punctuationText = stripUnknownTokens(punctuationResult.text);
 
-    if (punctuationResult.source === 'model' && punctuationResult.text.trim()) {
+    if (punctuationResult.source === 'model' && punctuationText.trim()) {
       const modelRewrite = rewriteChineseLocally({
-        rawText: punctuationResult.text,
+        rawText: punctuationText,
         scenario: settings.rewrite_scenario,
         preserveTerms: fallbackRewrite.preserveTerms,
         final,
       });
       const refinedRawText = sanitizeStreamingAiText(modelRewrite.refinedRawText)
-        || sanitizeStreamingAiText(punctuationResult.text)
+        || sanitizeStreamingAiText(punctuationText)
         || fallbackRewrite.refinedRawText;
       return {
         rewrite: {
@@ -1781,9 +2015,11 @@ class TypenewApp {
     this.streamingLatestText = '';
     this.streamingPastedText = '';
     this.streamingPastedSourceText = '';
+    this.streamingInsertionTransaction.reset(this.previousAppBundleId);
     this.streamingOutputText = '';
     this.streamingPastePendingText = '';
     this.streamingPasteInFlight = false;
+    this.streamingAutoPasteSuspended = false;
     this.streamingPendingBoundaryPunctuation = false;
     this.streamingLastPasteAt = 0;
     this.streamingAudioCache.reset();
@@ -1805,6 +2041,7 @@ class TypenewApp {
 
   private async rewriteWithLlm(text: string): Promise<string | null> {
     const settings = this.settingsStore.getSettings();
+    const cleanText = stripUnknownTokens(text);
 
     if (!settings.llm_rewrite?.enabled) {
       return null;
@@ -1814,15 +2051,16 @@ class TypenewApp {
     this.updateTrayAnimation();
     this.publishSnapshot();
 
-    const localRewriteResult = await this.buildModelAssistedLocalChineseRewrite(text, settings, true);
+    const localRewriteResult = await this.buildModelAssistedLocalChineseRewrite(cleanText, settings, true);
     const localRewrite = localRewriteResult.rewrite;
     const apiInput = [
       '请基于以下语音转写和本地规则预处理结果进行最终结构化润写。',
       '如果本地规则判断有误，以原始转写为准；不得新增原文没有的事实、数据、机关、日期或责任人。',
+      '原文中的英文、缩写、品牌、App、代码术语和中英/粤英/台式混输表达必须保留为原语言，不要翻译成中文。',
       `本地预处理来源：${localRewriteResult.source === 'model' ? '离线标点恢复模型 + 本地规则' : '本地规则兜底'}`,
       '',
       '<原始转写>',
-      text,
+      cleanText,
       '</原始转写>',
       '',
       buildLocalRewritePromptContext(localRewrite),
@@ -1843,12 +2081,15 @@ class TypenewApp {
   }
 
   private startStreamingAiPanelSession(settings: Settings): void {
+    this.streamingRewriteScenario = settings.rewrite_scenario || 'general';
     if (!settings.streaming_ai_panel_enabled) {
       this.patchStreamingAiPanelState({
         enabled: false,
         active: false,
         status: 'idle',
         status_text: '流式 AI 整理面板未开启。',
+        rewrite_scenario: this.streamingRewriteScenario,
+        rewrite_scenario_label: getRewriteScenarioLabel(this.streamingRewriteScenario),
         refined_raw_text: '',
         can_apply_refined_raw: false,
         apply_status_text: null,
@@ -1863,12 +2104,14 @@ class TypenewApp {
     this.streamingAiLastRequestAt = 0;
     this.streamingAiLastSubmittedText = '';
     this.showStreamingAiPanel(false);
-    const modeLabel = this.getStreamingEnhancementModeLabel(settings);
+    const modeLabel = this.getStreamingModeLabel(settings);
     this.patchStreamingAiPanelState({
       enabled: true,
       active: true,
       status: 'recording',
       status_text: this.getStreamingPanelStatusText(settings),
+      rewrite_scenario: this.streamingRewriteScenario,
+      rewrite_scenario_label: getRewriteScenarioLabel(this.streamingRewriteScenario),
       raw_text: '',
       refined_raw_text: '',
       ai_text: '',
@@ -1891,13 +2134,16 @@ class TypenewApp {
   }
 
   private getStreamingPanelStatusText(settings: Settings): string {
+    const outputStyle = settings.streaming_model === 'multilingual_segmented'
+      ? '短暂停顿后输出稳定片段'
+      : '光标处继续实时输出原文';
     switch (this.getStreamingEnhancementMode(settings)) {
       case 'online_enhanced':
         return this.canUseStreamingAi(settings)
-          ? '非涉密增强模式：光标处继续输出原文，停顿后面板生成 AI 修正原文和整理稿。'
-          : '非涉密增强模式：光标处继续输出原文；LLM 未启用或 API Key 未填写，面板先显示本地草稿。';
+          ? `非涉密增强模式：${outputStyle}，停顿后面板生成 AI 修正原文和整理稿。`
+          : `非涉密增强模式：${outputStyle}；LLM 未启用或 API Key 未填写，面板先显示本地草稿。`;
       default:
-        return '涉密离线模式：光标处继续输出原文，面板只做本地断句和终稿校准，不调用 API。';
+        return `涉密离线模式：${outputStyle}，面板只做本地断句和终稿校准，不调用 API。`;
     }
   }
 
@@ -1915,27 +2161,49 @@ class TypenewApp {
       return;
     }
 
-    const modeLabel = this.getStreamingEnhancementModeLabel(settings);
-    const localRewrite = this.buildLocalChineseRewrite(text, settings, false);
-    const localRefinedRaw = sanitizeStreamingAiText(localRewrite.refinedRawText) || text;
+    const cleanText = stripUnknownTokens(text);
+    const streamingSettings = this.getStreamingRewriteSettings(settings);
+    const modeLabel = this.getStreamingModeLabel(streamingSettings);
+    const localRewrite = this.buildLocalChineseRewrite(cleanText, streamingSettings, false);
+    const localRefinedRaw = sanitizeStreamingAiText(localRewrite.refinedRawText) || cleanText;
     this.patchStreamingAiPanelState({
       active: true,
       status: this.streamingAiInFlight ? 'thinking' : 'recording',
       status_text: this.streamingAiInFlight
         ? 'AI 正在整理稳定片段，光标处原文会继续实时输出。'
-        : this.getStreamingPanelStatusText(settings),
-      raw_text: text,
+        : this.getStreamingPanelStatusText(streamingSettings),
+      rewrite_scenario: this.streamingRewriteScenario,
+      rewrite_scenario_label: getRewriteScenarioLabel(this.streamingRewriteScenario),
+      raw_text: cleanText,
       refined_raw_text: localRefinedRaw,
-      can_apply_refined_raw: Boolean((this.streamingPastedText || this.streamingOutputText || text).trim()),
+      can_apply_refined_raw: Boolean((this.streamingPastedText || this.streamingOutputText || cleanText).trim()),
       mode_label: modeLabel,
-      ai_status_label: this.getStreamingAiStatusLabel(settings),
+      ai_status_label: this.getStreamingAiStatusLabel(streamingSettings),
       last_error: null,
     });
   }
 
-  private shouldRunStreamingAiReview(displayText: string, newSegmentLength: number, final: boolean, now: number): boolean {
+  private shouldRunStreamingAiReview(
+    displayText: string,
+    newSegmentLength: number,
+    final: boolean,
+    now: number,
+    settings: Settings
+  ): boolean {
+    const gateDecision = this.aiRewriteGate.decide({
+      text: displayText,
+      settings,
+      codeSwitch: this.codeSwitchLexicon.analyzeText(displayText),
+      final,
+    });
+
     if (final) {
-      return true;
+      console.log('[ai-rewrite-gate] streaming final decision', {
+        should_run: gateDecision.shouldRun,
+        reasons: gateDecision.reasons,
+        text_length: displayText.length,
+      });
+      return gateDecision.shouldRun;
     }
 
     if (!displayText.trim() || displayText === this.streamingAiLastSubmittedText) {
@@ -1951,7 +2219,8 @@ class TypenewApp {
     const hasLongEnoughDelta = newSegmentLength >= STREAMING_AI_FAST_MIN_CHARS;
     const hasEnoughStablePhrase = endsLikeStablePhrase && newSegmentLength >= 8;
     const hasLongContext = displayText.length >= STREAMING_AI_MIN_CHARS && newSegmentLength >= 12;
-    return hasLongEnoughDelta || hasEnoughStablePhrase || hasLongContext;
+    const enoughStreamingContext = hasLongEnoughDelta || hasEnoughStablePhrase || hasLongContext;
+    return enoughStreamingContext && gateDecision.shouldRun;
   }
 
   private queueStreamingAiReview(rawText: string, settings: Settings, final = false): void {
@@ -1959,17 +2228,21 @@ class TypenewApp {
       return;
     }
 
-    const displayText = this.buildStreamingRawDisplayText(rawText);
-    this.updateStreamingAiRawText(displayText, settings);
+    const streamingSettings = this.getStreamingRewriteSettings(settings);
+    const displayText = stripUnknownTokens(this.buildStreamingRawDisplayText(rawText));
+    this.updateStreamingAiRawText(displayText, streamingSettings);
 
-    if (!this.canUseStreamingAi(settings)) {
-      void this.updateLocalStreamingAiDraft(displayText, settings, final);
+    if (!this.canUseStreamingAi(streamingSettings)) {
+      void this.updateLocalStreamingAiDraft(displayText, streamingSettings, final);
       return;
     }
 
     const newSegmentLength = Math.max(0, displayText.length - this.streamingAiSubmittedRawLength);
     const now = Date.now();
-    if (!this.shouldRunStreamingAiReview(displayText, newSegmentLength, final, now)) {
+    if (!this.shouldRunStreamingAiReview(displayText, newSegmentLength, final, now, streamingSettings)) {
+      if (final) {
+        void this.updateLocalStreamingAiDraft(displayText, streamingSettings, final);
+      }
       return;
     }
 
@@ -1979,7 +2252,7 @@ class TypenewApp {
       return;
     }
 
-    void this.runStreamingAiReview(displayText, settings, final);
+    void this.runStreamingAiReview(displayText, streamingSettings, final);
   }
 
   private buildStreamingRawDisplayText(currentText: string): string {
@@ -1989,18 +2262,19 @@ class TypenewApp {
       this.streamingPastedText,
       this.streamingPastedSourceText,
       this.streamingLatestText,
-    ].map((value) => value.trim()).filter(Boolean);
+    ].map((value) => stripUnknownTokens(value).trim()).filter(Boolean);
 
     return candidates.sort((a, b) => b.length - a.length)[0] ?? '';
   }
 
   private async updateLocalStreamingAiDraft(rawText: string, settings: Settings, final = false): Promise<void> {
-    if (!settings.streaming_ai_panel_enabled || !rawText.trim()) {
+    const cleanRawText = stripUnknownTokens(rawText);
+    if (!settings.streaming_ai_panel_enabled || !cleanRawText.trim()) {
       return;
     }
 
     const sessionId = this.streamingSessionId;
-    const localRewriteResult = await this.buildModelAssistedLocalChineseRewrite(rawText, settings, final);
+    const localRewriteResult = await this.buildModelAssistedLocalChineseRewrite(cleanRawText, settings, final);
     if (sessionId !== this.streamingSessionId) {
       return;
     }
@@ -2013,10 +2287,12 @@ class TypenewApp {
       active: true,
       status: final ? 'ready' : 'recording',
       status_text: final ? localRewriteResult.statusText : this.getStreamingPanelStatusText(settings),
+      rewrite_scenario: settings.rewrite_scenario,
+      rewrite_scenario_label: getRewriteScenarioLabel(settings.rewrite_scenario),
       refined_raw_text: refinedRawText,
       ai_text: structuredText,
-      can_apply_refined_raw: Boolean((this.streamingPastedText || this.streamingOutputText || rawText).trim()),
-      mode_label: this.getStreamingEnhancementModeLabel(settings),
+      can_apply_refined_raw: Boolean((this.streamingPastedText || this.streamingOutputText || cleanRawText).trim()),
+      mode_label: this.getStreamingModeLabel(settings),
       ai_status_label: localRewriteResult.source === 'model'
         ? '离线标点模型 + 本地结构化，不联网'
         : this.getStreamingAiStatusLabel(settings),
@@ -2029,7 +2305,8 @@ class TypenewApp {
     fallbackText: string,
     settings: Settings
   ): Promise<string> {
-    if (this.getStreamingEnhancementMode(settings) !== 'offline_private') {
+    const isSegmentedStreaming = this.isActiveSegmentedStreamingMode(settings);
+    if (!isSegmentedStreaming && this.getStreamingEnhancementMode(settings) !== 'offline_private') {
       return fallbackText;
     }
 
@@ -2044,7 +2321,9 @@ class TypenewApp {
     }
 
     try {
-      const offlineEngine = await this.getNonStreamingAsrEngine();
+      const offlineEngine = isSegmentedStreaming && this.asrEngine?.getRecognitionMode() === 'non_streaming'
+        ? this.asrEngine
+        : await this.getNonStreamingAsrEngine();
       if (!offlineEngine) {
         return fallbackText;
       }
@@ -2063,24 +2342,27 @@ class TypenewApp {
       return;
     }
 
+    const cleanRawText = stripUnknownTokens(rawText);
     const sessionId = this.streamingSessionId;
     const previousSummary = this.streamingAiState.ai_text.trim();
-    const newSegment = rawText.slice(this.streamingAiSubmittedRawLength).trim();
+    const newSegment = cleanRawText.slice(this.streamingAiSubmittedRawLength).trim();
     if (!newSegment && !final) {
       return;
     }
-    const localRewriteResult = await this.buildModelAssistedLocalChineseRewrite(rawText, settings, final);
+    const localRewriteResult = await this.buildModelAssistedLocalChineseRewrite(cleanRawText, settings, final);
     const localRewrite = localRewriteResult.rewrite;
 
     this.streamingAiInFlight = true;
     this.streamingAiLastRequestAt = Date.now();
-    this.streamingAiSubmittedRawLength = rawText.length;
-    this.streamingAiLastSubmittedText = rawText;
+    this.streamingAiSubmittedRawLength = cleanRawText.length;
+    this.streamingAiLastSubmittedText = cleanRawText;
     this.patchStreamingAiPanelState({
       active: true,
       status: 'thinking',
       status_text: final ? '正在生成最终整理稿，原文已保留。' : '检测到停顿，AI 正在整理新增片段。',
-      mode_label: this.getStreamingEnhancementModeLabel(settings),
+      rewrite_scenario: settings.rewrite_scenario,
+      rewrite_scenario_label: getRewriteScenarioLabel(settings.rewrite_scenario),
+      mode_label: this.getStreamingModeLabel(settings),
       ai_status_label: 'API 正在纠错整理稳定片段',
       last_error: null,
     }, { immediate: final });
@@ -2088,7 +2370,7 @@ class TypenewApp {
     try {
       const prompt = this.buildStreamingAiPrompt({
         previousSummary,
-        rawText,
+        rawText: cleanRawText,
         newSegment,
         final,
         scenario: settings.rewrite_scenario,
@@ -2106,27 +2388,63 @@ class TypenewApp {
       }
 
       const parsed = parseStreamingAiResult(result.polishedText || localRewrite.structuredText, localRewrite.refinedRawText);
+      const refinedRawText = sanitizeStreamingAiText(parsed.refinedRawText || localRewrite.refinedRawText);
+      const summaryText = sanitizeStreamingAiText(parsed.summaryText || localRewrite.structuredText || previousSummary || newSegment);
       this.patchStreamingAiPanelState({
         status: 'ready',
         status_text: final ? '最终整理稿已生成。' : '整理稿已更新；可以继续说。',
-        refined_raw_text: parsed.refinedRawText || localRewrite.refinedRawText,
-        ai_text: parsed.summaryText || localRewrite.structuredText || previousSummary || newSegment,
-        can_apply_refined_raw: Boolean((this.streamingPastedText || this.streamingOutputText || rawText).trim()),
-        mode_label: this.getStreamingEnhancementModeLabel(settings),
+        rewrite_scenario: settings.rewrite_scenario,
+        rewrite_scenario_label: getRewriteScenarioLabel(settings.rewrite_scenario),
+        refined_raw_text: refinedRawText,
+        ai_text: summaryText,
+        can_apply_refined_raw: Boolean((this.streamingPastedText || this.streamingOutputText || cleanRawText).trim()),
+        mode_label: this.getStreamingModeLabel(settings),
         ai_status_label: 'API 纠错整理已完成',
         last_review_at: new Date().toISOString(),
         last_error: null,
       }, { immediate: true });
+
+      if (
+        final
+        && settings.auto_paste
+        && refinedRawText
+        && this.streamingInsertionTransaction.hasInsertedText()
+        && refinedRawText !== this.streamingInsertionTransaction.getInsertedText()
+      ) {
+        const replaceResult = await this.streamingInsertionTransaction.replaceInsertedText(
+          refinedRawText,
+          this.previousAppBundleId
+        );
+        if (replaceResult.status === 'replaced') {
+          this.streamingPastedText = refinedRawText;
+          this.streamingOutputText = refinedRawText;
+          this.streamingPastedSourceText = refinedRawText;
+          this.patchStreamingAiPanelState({
+            apply_status_text: 'AI 修正原文已后台替换到光标处。',
+            status_text: '最终整理稿已生成，AI 修正原文已后台替换。',
+            last_error: null,
+          }, { immediate: true });
+        } else if (replaceResult.status !== 'no_inserted_text') {
+          this.patchStreamingAiPanelState({
+            apply_status_text: replaceResult.status === 'clipboard_changed'
+              ? '检测到剪贴板已有新内容，AI 修正原文未后台替换。'
+              : 'AI 修正原文已生成，但目标窗口未完成后台替换。',
+            last_error: replaceResult.error ?? replaceResult.status,
+          }, { immediate: true });
+        }
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error('[streaming-ai] review failed:', error);
       this.patchStreamingAiPanelState({
         status: 'ready',
         status_text: `API 整理失败，已回退${localRewriteResult.source === 'model' ? '离线断句模型整理稿' : '本地规则整理稿'}。`,
+        rewrite_scenario: settings.rewrite_scenario,
+        rewrite_scenario_label: getRewriteScenarioLabel(settings.rewrite_scenario),
         refined_raw_text: sanitizeStreamingAiText(localRewrite.refinedRawText),
         ai_text: sanitizeStreamingAiText(localRewrite.structuredText),
-        can_apply_refined_raw: Boolean((this.streamingPastedText || this.streamingOutputText || rawText).trim()),
-        mode_label: this.getStreamingEnhancementModeLabel(settings),
+        can_apply_refined_raw: Boolean((this.streamingPastedText || this.streamingOutputText || cleanRawText).trim()),
+        mode_label: this.getStreamingModeLabel(settings),
         ai_status_label: localRewriteResult.source === 'model'
           ? 'API 整理失败，已使用离线断句模型'
           : 'API 整理失败，已使用本地规则',
@@ -2159,6 +2477,10 @@ class TypenewApp {
       : '这是流式录音中的一次停顿整理，请基于完整原文、已有整理稿和新增片段，输出更新后的修正原文与整理稿。';
     const scenarioLabel = getRewriteScenarioLabel(input.scenario);
     const scenarioPrompt = getRewriteScenarioPrompt(input.scenario);
+    const rawText = stripUnknownTokens(input.rawText);
+    const newSegment = stripUnknownTokens(input.newSegment);
+    const previousSummary = sanitizeStreamingAiText(input.previousSummary);
+    const localRewriteContext = stripUnknownTokens(buildLocalRewritePromptContext(input.localRewrite));
 
     return [
       '请作为专业语音转文字结构化整理助手工作。',
@@ -2166,6 +2488,7 @@ class TypenewApp {
       `当前清洗类型：${scenarioLabel}`,
       `类型要求：${scenarioPrompt}`,
       '总要求：纠正明显错字和口误；补齐自然标点；保留所有关键信息、数据、结论、条件、时间、地点、人物、待办和限制；不要编造未说出的事实。',
+      '原文里的英文、缩写、品牌、App、代码术语和中英/粤英/台式混输表达必须保留原写法，不要翻译成中文。',
       '左侧“AI修正原文”只做轻纠错、标点和语序微调，不要改成会议纪要，不要删减关键信息。',
       '右侧“整理稿”按当前清洗类型成稿，可以重排结构，但不得遗漏原文实质内容；公文和正式文档缺少的机关、日期、编号等不要编造，可写“待补充”。',
       '下面提供了本地规则预处理结果。请优先吸收本地断句、术语保护和结构提纲；如果本地规则明显误判，以完整实时原文为准。',
@@ -2175,24 +2498,24 @@ class TypenewApp {
       'AI修正原文：',
       '整理稿：',
       '',
-      buildLocalRewritePromptContext(input.localRewrite),
+      localRewriteContext,
       '',
       '<已有整理稿>',
-      input.previousSummary || '（暂无）',
+      previousSummary || '（暂无）',
       '</已有整理稿>',
       '',
       '<完整实时原文>',
-      input.rawText || '（暂无）',
+      rawText || '（暂无）',
       '</完整实时原文>',
       '',
       '<新增稳定原文片段>',
-      input.newSegment || '（本次没有新增片段，请基于已有整理稿做最终整理。）',
+      newSegment || '（本次没有新增片段，请基于已有整理稿做最终整理。）',
       '</新增稳定原文片段>',
     ].join('\n');
   }
 
   private shouldFlushStreamingPaste(delta: string, completedSpeechSegment: boolean, now: number): boolean {
-    if (!delta) {
+    if (!delta || this.streamingAutoPasteSuspended) {
       return false;
     }
 
@@ -2229,11 +2552,36 @@ class TypenewApp {
       while (this.streamingPastePendingText && sessionId === this.streamingSessionId) {
         const text = this.streamingPastePendingText;
         this.streamingPastePendingText = '';
-        await this.autoPaste.writeClipboard(text);
-        await this.autoPaste.pasteToApp(this.previousAppBundleId);
+        const result = await this.streamingInsertionTransaction.pasteAppend(
+          text,
+          this.streamingPastedSourceText,
+          this.previousAppBundleId
+        );
+        if (result.status !== 'pasted') {
+          this.streamingAutoPasteSuspended = true;
+          this.streamingPastePendingText = '';
+          this.streamingPastedText = this.streamingInsertionTransaction.getInsertedText();
+          this.streamingOutputText = this.streamingInsertionTransaction.getInsertedText();
+          this.streamingPastedSourceText = this.streamingInsertionTransaction.getSourceText();
+          await this.autoPaste.writeClipboard(this.streamingLatestText || this.streamingPastedSourceText || text);
+          this.patchStreamingAiPanelState({
+            apply_status_text: '目标输入框未接住实时输出，已暂停自动追加；最新识别内容已保存在剪贴板。',
+            status_text: '自动回填暂停，请点回微信输入框后手动粘贴或重新开始。',
+            last_error: result.error ?? 'streaming_paste_failed',
+          }, { immediate: true });
+          break;
+        }
       }
     } catch (error) {
       console.error('Streaming paste queue failed:', error);
+      this.streamingAutoPasteSuspended = true;
+      this.streamingPastePendingText = '';
+      await this.autoPaste.writeClipboard(this.streamingLatestText || this.streamingPastedSourceText || this.streamingOutputText);
+      this.patchStreamingAiPanelState({
+        apply_status_text: '实时输出失败，已暂停自动追加；识别内容仍在剪贴板。',
+        status_text: '自动回填暂停，请点回目标输入框后手动粘贴。',
+        last_error: error instanceof Error ? error.message : String(error),
+      }, { immediate: true });
     } finally {
       this.streamingPasteInFlight = false;
       if (this.streamingPastePendingText && sessionId === this.streamingSessionId) {
@@ -2266,6 +2614,77 @@ class TypenewApp {
     this.queueStreamingChunk(samples, this.streamingSessionId);
   }
 
+  private appendStreamingStableText(currentText: string, nextText: string): string {
+    const left = currentText.trim();
+    const right = nextText.trim();
+    if (!left) {
+      return right;
+    }
+    if (!right) {
+      return left;
+    }
+    if (/[，,。！？!?；;：:\n]$/u.test(left) || /^[，,。！？!?；;：:\n]/u.test(right)) {
+      return `${left}${right}`;
+    }
+    const needsSpace = /[A-Za-z0-9]$/u.test(left) && /^[A-Za-z0-9]/u.test(right);
+    return `${left}${needsSpace ? ' ' : ''}${right}`;
+  }
+
+  private async processSegmentedStreamingSegments(
+    segments: Float32Array[],
+    settings: Settings,
+    sessionId: number,
+    final = false
+  ): Promise<void> {
+    if (segments.length === 0 || !this.asrEngine) {
+      return;
+    }
+
+    for (const segment of segments) {
+      if (sessionId !== this.streamingSessionId) {
+        return;
+      }
+
+      try {
+        const asrResult = await this.asrEngine.transcribeRich(segment);
+        if (sessionId !== this.streamingSessionId) {
+          return;
+        }
+
+        const cleanedSegment = this.cleanupTranscriptWithDictionary(asrResult.text, settings, { partial: !final });
+        if (!cleanedSegment) {
+          continue;
+        }
+
+        const sourceBefore = this.streamingLatestText || this.streamingPastedSourceText || this.streamingOutputText;
+        const combinedText = this.appendStreamingStableText(sourceBefore, cleanedSegment);
+        this.streamingLatestText = combinedText;
+        this.updateStreamingAiRawText(this.buildStreamingRawDisplayText(combinedText), settings);
+
+        if (settings.auto_paste && !this.streamingAutoPasteSuspended) {
+          const delta = combinedText.startsWith(this.streamingPastedSourceText)
+            ? combinedText.slice(this.streamingPastedSourceText.length)
+            : this.appendStreamingStableText('', cleanedSegment);
+          if (delta) {
+            this.enqueueStreamingPaste(delta, combinedText, sessionId);
+          }
+        }
+
+        this.queueStreamingAiReview(combinedText, settings, final);
+        console.log('Segmented streaming ASR segment decoded', {
+          sessionId,
+          final,
+          segment_samples: segment.length,
+          text_length: cleanedSegment.length,
+          language: asrResult.language,
+          confidence: asrResult.confidence,
+        });
+      } catch (error) {
+        console.error('Segmented streaming ASR segment failed:', error);
+      }
+    }
+  }
+
   private queueStreamingChunk(samples: Float32Array, sessionId: number): void {
     this.streamingChunkQueue = this.streamingChunkQueue
       .then(async () => {
@@ -2273,9 +2692,16 @@ class TypenewApp {
           return;
         }
 
-        const completedSpeechSegment = (this.streamingSegmenter?.push(samples).length ?? 0) > 0;
+        const completedSegments = this.streamingSegmenter?.push(samples) ?? [];
+        const completedSpeechSegment = completedSegments.length > 0;
         await this.ensureAsrEngineReady();
         const settings = this.settingsStore.getSettings();
+
+        if (this.isActiveSegmentedStreamingMode(settings)) {
+          await this.processSegmentedStreamingSegments(completedSegments, settings, sessionId);
+          return;
+        }
+
         const text = this.asrEngine?.acceptStreamingAudio(samples) ?? '';
         if (this.streamingChunkLogCount <= 5 || this.streamingChunkLogCount % 20 === 0 || text.length > 0) {
           console.log('Streaming ASR chunk decoded', {
@@ -2337,10 +2763,22 @@ class TypenewApp {
     if (sessionId !== this.streamingSessionId) {
       return;
     }
+
+    const settings = this.settingsStore.getSettings();
+    if (this.isActiveSegmentedStreamingMode(settings)) {
+      await this.processSegmentedStreamingSegments(
+        this.streamingSegmenter?.flush() ?? [],
+        settings,
+        sessionId,
+        true
+      );
+    }
+
     await this.waitForStreamingPasteQueueToDrain(sessionId);
 
-    const finalRawText = this.asrEngine?.finishStreamingSession() ?? '';
-    const settings = this.settingsStore.getSettings();
+    const finalRawText = this.isActiveSegmentedStreamingMode(settings)
+      ? (this.streamingLatestText || this.streamingOutputText || this.streamingPastedSourceText)
+      : (this.asrEngine?.finishStreamingSession() ?? '');
     const cleanedStreamingText = this.cleanupTranscriptWithDictionary(
       finalRawText || this.streamingLatestText || this.streamingOutputText,
       settings
@@ -2376,7 +2814,8 @@ class TypenewApp {
     this.queueStreamingAiReview(normalized, settings, true);
     console.log('Streaming transcription complete', createTranscriptionLogMeta(normalized));
 
-    if (settings.auto_paste) {
+    if (settings.auto_paste && !this.streamingAutoPasteSuspended) {
+      let autoPasteSucceeded = this.streamingInsertionTransaction.hasInsertedText();
       const finalDelta = finalText.startsWith(this.streamingPastedSourceText)
         ? finalText.slice(this.streamingPastedSourceText.length)
         : '';
@@ -2387,19 +2826,45 @@ class TypenewApp {
       if (pasteText) {
         this.enqueueStreamingPaste(pasteText, finalText, sessionId);
         await this.waitForStreamingPasteQueueToDrain(sessionId);
+        autoPasteSucceeded = !this.streamingAutoPasteSuspended && this.streamingInsertionTransaction.hasInsertedText();
       } else if (this.streamingPastedSourceText && this.streamingPastedSourceText !== finalText) {
-        console.warn('Streaming final text diverged from pasted partials', {
-          pasted_length: this.streamingPastedSourceText.length,
-          final_length: finalText.length,
-        });
+        const replaceResult = await this.streamingInsertionTransaction.replaceInsertedText(
+          finalText,
+          this.previousAppBundleId
+        );
+        if (replaceResult.status === 'replaced') {
+          this.streamingPastedText = finalText;
+          this.streamingOutputText = finalText;
+          autoPasteSucceeded = true;
+          console.log('Streaming final text replaced pasted partials', {
+            chars_replaced: replaceResult.charsReplaced,
+            final_length: Array.from(finalText).length,
+          });
+        } else {
+          console.warn('Streaming final text diverged from pasted partials and could not be replaced', {
+            status: replaceResult.status,
+            pasted_length: this.streamingPastedSourceText.length,
+            final_length: finalText.length,
+            error: replaceResult.error,
+          });
+        }
       }
 
       await this.autoPaste.writeClipboard(normalized);
+      this.streamingInsertionTransaction.rememberClipboardText(normalized);
       this.streamingPastedSourceText = finalText;
       this.streamingPastedText = this.streamingPastedText || finalText;
-      this.stateMachine.markAutoPasteSuccess();
+      if (autoPasteSucceeded) {
+        this.stateMachine.markAutoPasteSuccess();
+      }
     } else {
       await this.autoPaste.writeClipboard(normalized);
+      if (settings.auto_paste && this.streamingAutoPasteSuspended) {
+        this.patchStreamingAiPanelState({
+          apply_status_text: '自动回填已暂停，最终文本已复制到剪贴板。',
+          status_text: '最终文本已生成；请在微信输入框手动粘贴。',
+        }, { immediate: true });
+      }
     }
     this.streamingSegmenter?.reset();
     this.streamingSegmenter = null;
@@ -2502,32 +2967,30 @@ class TypenewApp {
   private describeProvider(provider: string | null): string {
     switch (provider) {
       case 'coreml':
-        return 'GPU (CoreML)';
       case 'cuda':
-        return 'GPU (CUDA)';
       case 'directml':
-        return 'GPU (DirectML)';
+        return '本机加速';
       case 'cpu':
-        return 'CPU';
+        return '极速本机';
       default:
-        return 'not configured';
+        return '未配置';
     }
   }
 
   private getAsrModelStatusLabel(): string {
     if (this.asrEngine) {
-      return this.asrEngine.getRuntimeLabel();
+      return `已就绪 · ${this.describeProvider(this.asrEngine.getActiveProvider())}`;
     }
 
     if (this.isAsrInitializing) {
-      return 'initializing';
+      return '正在准备';
     }
 
     if (this.asrInitializationError) {
-      return `error: ${this.asrInitializationError.message}`;
+      return `异常：${this.asrInitializationError.message}`;
     }
 
-    return 'not configured';
+    return '未启动';
   }
 
 }

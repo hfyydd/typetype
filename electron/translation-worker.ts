@@ -160,7 +160,7 @@ async function handleTranslate(message: TranslateRequestMessage): Promise<Transl
       requestId: message.requestId,
       sourceLanguage: message.sourceLanguage,
       targetLanguage: message.targetLanguage,
-      text: message.text,
+      textLength: message.text.length,
     });
     const translator = await loadPipeline(message.cacheDir, message.modelId);
     const output = await translator(message.text, {
@@ -171,7 +171,7 @@ async function handleTranslate(message: TranslateRequestMessage): Promise<Transl
     const translated = output[0]?.translation_text ?? output[0]?.generated_text ?? '';
     console.log('[translation-debug] worker-handle-result', {
       requestId: message.requestId,
-      text: translated.trim(),
+      textLength: translated.trim().length,
     });
 
     return {

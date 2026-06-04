@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const { StateMachine } = require("../dist-electron/state-machine.js");
+const { cleanupTranscript } = require("../dist-electron/transcript-cleanup.js");
 
 test("StateMachine cleanupTranscript applies dictionary and punctuation cleanup without writing profiles", () => {
   const machine = new StateMachine({
@@ -21,6 +22,16 @@ test("StateMachine cleanupTranscript applies dictionary and punctuation cleanup 
   const result = machine.finishTranscription("typo type ,test");
 
   assert.equal(result, "typetype,test");
+});
+
+test("cleanupTranscript removes ASR unknown tokens before downstream rewrite", () => {
+  const result = cleanupTranscript(
+    "<unk>大家好，我是小明 <unk>现在我要 Go TO SLEEP<unk> 。",
+    { custom_dictionary: [] }
+  );
+
+  assert.equal(result.includes("<unk>"), false);
+  assert.equal(result, "大家好，我是小明现在我要 Go TO SLEEP。");
 });
 
 test("StateMachine stopTranscribing exposes a stopped status without committing transcript", () => {

@@ -18,7 +18,10 @@ export interface InitializeAsrEngineOptions {
 }
 
 const SENSE_VOICE_MODEL_DIR = 'sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09';
+const STREAMING_MIXED_MODEL_DIR = 'sherpa-onnx-streaming-paraformer-trilingual-zh-cantonese-en';
 const STREAMING_XLARGE_MODEL_DIR = 'sherpa-onnx-streaming-zipformer-ctc-zh-xlarge-int8-2025-06-30';
+const PRO_HIGH_ACCURACY_MODEL_DIR = 'typetype-professional-high-accuracy-voice-package';
+const PRO_HIGH_ACCURACY_DOWNLOAD_URL = process.env.TYPETYPE_PRO_VOICE_PACKAGE_URL || '';
 
 const MODEL_DOWNLOAD_URLS = {
   'sherpa-onnx-sense-voice': {
@@ -30,6 +33,11 @@ const MODEL_DOWNLOAD_URLS = {
     url: `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/${STREAMING_XLARGE_MODEL_DIR}.tar.bz2`,
     archiveName: `${STREAMING_XLARGE_MODEL_DIR}.tar.bz2`,
     modelDirName: STREAMING_XLARGE_MODEL_DIR,
+  },
+  'typetype-professional-high-accuracy': {
+    url: PRO_HIGH_ACCURACY_DOWNLOAD_URL,
+    archiveName: `${PRO_HIGH_ACCURACY_MODEL_DIR}.tar.bz2`,
+    modelDirName: PRO_HIGH_ACCURACY_MODEL_DIR,
   },
 };
 
@@ -218,6 +226,10 @@ async function downloadModel(modelName: string, dataDir: string): Promise<string
     console.error(`No download URL for model: ${modelName}`);
     return null;
   }
+  if (!modelInfo.url) {
+    console.warn(`Download URL is not configured for model: ${modelName}`);
+    return null;
+  }
 
   const modelsDir = path.join(dataDir, 'models');
   const modelDir = path.join(modelsDir, modelInfo.modelDirName);
@@ -255,6 +267,39 @@ export async function initializeAsrEngine({
   appPath = app.getAppPath(),
 }: InitializeAsrEngineOptions): Promise<AsrEngine | null> {
   if (settings.recognition_mode === 'streaming_output') {
+    if (settings.streaming_model === 'multilingual_segmented') {
+      const segmentedStreamingSettings: Settings = {
+        ...settings,
+        recognition_mode: 'non_streaming',
+        pinned_model_version: 'sherpa-onnx-sense-voice',
+      };
+
+      const configuredEngine = settings.model_path
+        ? await tryCreateEngine([settings.model_path], segmentedStreamingSettings)
+        : null;
+      if (configuredEngine) return configuredEngine;
+
+      const engine = await tryCreateEngine(
+        getMixedSegmentedStreamingModelSearchPaths({
+          dataDir,
+          processResourcesPath,
+          appPath,
+        }),
+        segmentedStreamingSettings
+      );
+      if (engine) return engine;
+
+      const downloadedPath = await downloadModel('sherpa-onnx-sense-voice', dataDir);
+      if (downloadedPath) {
+        const downloadedEngine = await tryCreateEngine([downloadedPath], segmentedStreamingSettings);
+        if (downloadedEngine) {
+          return downloadedEngine;
+        }
+      }
+
+      console.warn('Mixed segmented streaming model is unavailable; falling back to Chinese online streaming');
+    }
+
     const engine = await tryCreateEngine(
       getStreamingModelSearchPaths({
         dataDir,
@@ -286,6 +331,30 @@ export async function initializeAsrEngine({
     }
   }
 
+  if (settings.voice_package === 'pro_high_accuracy') {
+    const professionalSettings: Settings = {
+      ...settings,
+      compute_backend: 'gpu',
+    };
+    const professionalEngine = await tryCreateEngine(
+      getProfessionalModelSearchPaths({ dataDir, processResourcesPath, appPath }),
+      professionalSettings
+    );
+    if (professionalEngine) {
+      return professionalEngine;
+    }
+
+    const downloadedPath = await downloadModel('typetype-professional-high-accuracy', dataDir);
+    if (downloadedPath) {
+      const downloadedEngine = await tryCreateEngine([downloadedPath], professionalSettings);
+      if (downloadedEngine) {
+        return downloadedEngine;
+      }
+    }
+
+    console.warn('Professional voice package is unavailable; falling back to the fast offline package');
+  }
+
   const searchPaths = getModelSearchPaths({
     dataDir,
     processResourcesPath,
@@ -301,6 +370,28 @@ export async function initializeAsrEngine({
   }
 
   return null;
+}
+
+function getProfessionalModelSearchPaths({
+  dataDir,
+  processResourcesPath,
+  appPath,
+}: {
+  dataDir: string;
+  processResourcesPath: string;
+  appPath: string;
+}): string[] {
+  const modelDirs = [
+    PRO_HIGH_ACCURACY_MODEL_DIR,
+    'pro-high-accuracy',
+    'professional-high-accuracy',
+  ];
+
+  return modelDirs.flatMap((modelDir) => [
+    pathJoin(dataDir, 'models', modelDir),
+    pathJoin(processResourcesPath, 'models', modelDir),
+    pathJoin(appPath, 'resources', 'models', modelDir),
+  ]);
 }
 
 async function tryCreateEngine(searchPaths: string[], settings: Settings): Promise<AsrEngine | null> {
@@ -333,7 +424,10 @@ function getStreamingModelSearchPaths({
   appPath: string;
   settings: Settings;
 }): string[] {
-  const modelDirs = [STREAMING_XLARGE_MODEL_DIR];
+  const preferredModelDirs = settings.streaming_model === 'zh_high_accuracy_realtime'
+    ? [STREAMING_XLARGE_MODEL_DIR, STREAMING_MIXED_MODEL_DIR]
+    : [STREAMING_MIXED_MODEL_DIR, STREAMING_XLARGE_MODEL_DIR];
+  const modelDirs = Array.from(new Set(preferredModelDirs));
 
   return [
     ...modelDirs.flatMap((modelDir) => [
@@ -341,6 +435,23 @@ function getStreamingModelSearchPaths({
       pathJoin(processResourcesPath, 'models', modelDir),
       pathJoin(appPath, 'resources', 'models', modelDir),
     ]),
+    ...getModelSearchPaths({ dataDir, processResourcesPath, appPath }),
+  ];
+}
+
+function getMixedSegmentedStreamingModelSearchPaths({
+  dataDir,
+  processResourcesPath,
+  appPath,
+}: {
+  dataDir: string;
+  processResourcesPath: string;
+  appPath: string;
+}): string[] {
+  return [
+    pathJoin(dataDir, 'models', SENSE_VOICE_MODEL_DIR),
+    pathJoin(processResourcesPath, 'models', SENSE_VOICE_MODEL_DIR),
+    pathJoin(appPath, 'resources', 'models', SENSE_VOICE_MODEL_DIR),
     ...getModelSearchPaths({ dataDir, processResourcesPath, appPath }),
   ];
 }

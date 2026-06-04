@@ -10,6 +10,7 @@ import {
   DictionaryImportRequest,
   DictionaryViewData,
   StreamingAiPanelState,
+  RewriteScenario,
 } from './types';
 
 export interface ElectronAPI {
@@ -42,6 +43,8 @@ export interface ElectronAPI {
   copyStreamingAiRaw: () => Promise<StreamingAiPanelState>;
   copyStreamingAiSummary: () => Promise<StreamingAiPanelState>;
   applyStreamingAiRefinedRaw: () => Promise<StreamingAiPanelState>;
+  applyStreamingAiSummary: () => Promise<StreamingAiPanelState>;
+  setStreamingAiScenario: (scenario: RewriteScenario) => Promise<StreamingAiPanelState>;
   subscribeSnapshot: (listener: (snapshot: UiSnapshot) => void) => () => void;
   subscribeSettingsViewData: (listener: (view: SettingsViewData) => void) => () => void;
   subscribeStreamingAiPanelState: (listener: (state: StreamingAiPanelState) => void) => () => void;
@@ -78,6 +81,8 @@ const api: ElectronAPI = {
   copyStreamingAiRaw: () => ipcRenderer.invoke('copy_streaming_ai_raw'),
   copyStreamingAiSummary: () => ipcRenderer.invoke('copy_streaming_ai_summary'),
   applyStreamingAiRefinedRaw: () => ipcRenderer.invoke('apply_streaming_ai_refined_raw'),
+  applyStreamingAiSummary: () => ipcRenderer.invoke('apply_streaming_ai_summary'),
+  setStreamingAiScenario: (scenario: RewriteScenario) => ipcRenderer.invoke('set_streaming_ai_scenario', scenario),
   subscribeSnapshot: (listener: (snapshot: UiSnapshot) => void) => {
     const wrapped = (_event: Electron.IpcRendererEvent, snapshot: UiSnapshot) => {
       listener(snapshot);
