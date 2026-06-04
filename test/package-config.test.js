@@ -38,16 +38,12 @@ test("electron-builder excludes bundled model sample assets from packaged output
   ]);
 });
 
-test("electron-builder packages bundled translation runtimes as extra resources", () => {
+test("electron-builder does not package Windows runtimes as extra resources", () => {
   const runtimeEntry = pkg.build.extraResources.find((entry) => entry?.from === "resources/translation-runtime");
   const llamaRuntimeEntry = pkg.build.extraResources.find((entry) => entry?.from === "resources/runtimes");
 
   assert.equal(runtimeEntry, undefined);
-  assert.deepEqual(llamaRuntimeEntry, {
-    from: "resources/runtimes",
-    to: "runtimes",
-    filter: ["**/*"],
-  });
+  assert.equal(llamaRuntimeEntry, undefined);
 });
 
 test("electron-builder packages offline punctuation model as extra resources", () => {
@@ -68,27 +64,18 @@ test("package metadata keeps the typetype app id and product name", () => {
 
 test("package uses the native sherpa node addon instead of the wasm package", () => {
   assert.equal(pkg.dependencies["sherpa-onnx-node"] !== undefined, true);
-  assert.equal(pkg.dependencies["sherpa-onnx-win-x64"] !== undefined, true);
+  assert.equal(pkg.dependencies["sherpa-onnx-win-x64"] === undefined, true);
   assert.equal(pkg.dependencies["sherpa-onnx"] === undefined, true);
 });
 
-test("windows packaging unpacks native sherpa runtime files", () => {
+test("macOS packaging unpacks native sherpa runtime files without Windows ones", () => {
   assert.deepEqual(pkg.build.asarUnpack, [
     "node_modules/sherpa-onnx-node/**/*",
-    "node_modules/sherpa-onnx-win-x64/**/*",
     "node_modules/onnxruntime-node/**/*",
   ]);
 });
 
-test("windows packaging explicitly includes ffmpeg.dll beside the executable", () => {
-  const ffmpegEntry = pkg.build.win?.extraFiles?.find((entry) => entry?.from === "node_modules/electron/dist/ffmpeg.dll");
-
-  assert.deepEqual(ffmpegEntry, {
-    from: "node_modules/electron/dist/ffmpeg.dll",
-    to: ".",
-  });
+test("package does not expose Windows packaging configuration", () => {
+  assert.equal(pkg.build.win, undefined);
 });
 
-test("windows packaging keeps only Chinese and English Electron locales", () => {
-  assert.deepEqual(pkg.build.win?.electronLanguages, ["zh-CN", "en-US"]);
-});
