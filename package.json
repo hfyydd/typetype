@@ -32,6 +32,7 @@
   "build": {
     "appId": "app.typetype",
     "productName": "typetype",
+    "compression": "maximum",
     "electronDist": "node_modules/electron/dist",
     "directories": {
       "output": "release"
