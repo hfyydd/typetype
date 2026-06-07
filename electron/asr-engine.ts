@@ -383,10 +383,7 @@ export class AsrEngine {
             provider,
             this.numThreads
           );
-          this.recognizer =
-            typeof sherpaOnnx.OfflineRecognizer.createAsync === 'function'
-              ? await sherpaOnnx.OfflineRecognizer.createAsync(config)
-              : new sherpaOnnx.OfflineRecognizer(config);
+          this.recognizer = new sherpaOnnx.OfflineRecognizer(config);
         }
 
         this.activeProvider = provider;

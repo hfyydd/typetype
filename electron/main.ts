@@ -69,6 +69,16 @@ import { CodeSwitchLexicon } from './code-switch-lexicon';
 import { AiRewriteGate } from './ai-rewrite-gate';
 import { SemanticPunctuationEngine } from './semantic-punctuation-engine';
 
+// Fix PATH env variable for packaged apps on macOS to support locating Homebrew's sox
+if (process.platform === 'darwin') {
+  const commonPaths = ['/opt/homebrew/bin', '/usr/local/bin'];
+  const currentPath = process.env.PATH || '';
+  const pathsToAppend = commonPaths.filter(p => !currentPath.split(path.delimiter).includes(p) && fs.existsSync(p));
+  if (pathsToAppend.length > 0) {
+    process.env.PATH = [...pathsToAppend, ...currentPath.split(path.delimiter)].join(path.delimiter);
+  }
+}
+
 const FEEDBACK_EMAIL = 'feedback@typetype.app';
 const WINDOWS_LOGIN_ITEM_NAME = 'typetype';
 const WINDOWS_LEGACY_LOGIN_ITEM_NAMES = [

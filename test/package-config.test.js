@@ -71,11 +71,24 @@ test("package uses the native sherpa node addon instead of the wasm package", ()
 test("macOS packaging unpacks native sherpa runtime files without Windows ones", () => {
   assert.deepEqual(pkg.build.asarUnpack, [
     "node_modules/sherpa-onnx-node/**/*",
+    "node_modules/sherpa-onnx-darwin-arm64/**/*",
+    "node_modules/sherpa-onnx-darwin-x64/**/*",
     "node_modules/onnxruntime-node/**/*",
   ]);
 });
 
 test("package does not expose Windows packaging configuration", () => {
   assert.equal(pkg.build.win, undefined);
+});
+
+test("macOS packaging includes NSMicrophoneUsageDescription for system permissions", () => {
+  assert.equal(
+    pkg.build.mac?.extendInfo?.NSMicrophoneUsageDescription !== undefined,
+    true
+  );
+  assert.match(
+    pkg.build.mac.extendInfo.NSMicrophoneUsageDescription,
+    /麦克风/
+  );
 });
 

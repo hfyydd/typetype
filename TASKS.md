@@ -1,15 +1,18 @@
-# Desktop Translation Tasks
+# Desktop Translation & Packaging Tasks
 
 ## Source Requirements
 
+- User reported that the packaged application does not output text after installation (though it works fine in development mode).
 - User reported current desktop usability issues around translation, hotkeys, settings apply flow, and launch-at-login.
 
 ## Current Implementation Status
 
+- Packaging configuration is missing `asarUnpack` for platform-specific macOS sherpa-onnx libraries, causing ASR crash on startup in the packaged app.
 - Desktop currently supports translation through a `transformers.js`-based NLLB pipeline.
 
 ## Known Gaps
 
+- ASR platform-specific native dependencies (sherpa-onnx-darwin-arm64, sherpa-onnx-darwin-x64) are not unpacked in the ASAR archive, causing `Napi::Error` crashes.
 - Streaming dictation/translation usability is currently broken or incomplete.
 - Non-streaming translation path is reported as not functioning in the app.
 - `Alt + .` is reported as unreliable for triggering translation.
@@ -18,12 +21,19 @@
 
 ## Acceptance Criteria
 
+- Packaged macOS app runs and initializes ASR successfully without any native crash.
 - Voice input/translation hotkey flows work in both supported modes, or unsupported combinations are clearly disabled in UI.
 - Settings page exposes an explicit Apply action for shortcut/language changes.
 - Launch-at-login behavior is re-verified.
 
 ## Prioritized Todo
 
+- [x] Unpack `sherpa-onnx-darwin-arm64` and `sherpa-onnx-darwin-x64` in `package.json` `asarUnpack` config.
+- [x] Update `test/package-config.test.js` to assert the new `asarUnpack` entries.
+- [x] Run automated tests to verify configuration and code correctness.
+- [x] Build the packaged macOS app and run it to verify ASR starts and functions correctly.
+- [x] Add `NSMicrophoneUsageDescription` in `package.json` to request macOS microphone permissions.
+- [x] Correct the PATH env variable in `main.ts` so packaged GUI apps can spawn Homebrew's `sox`.
 - [ ] Investigate and fix broken non-streaming translation flow.
 - [ ] Investigate and fix `Alt + .` hotkey reliability.
 - [ ] Decide and implement supported behavior for streaming translation.
@@ -32,8 +42,12 @@
 
 ## Execution Log
 
+- 2026-06-07 Round 4: Solved macOS packaged GUI app PATH issue where `sox` could not be found due to Finder (`launchd`) launching GUI apps with a minimal PATH. Added PATH correction logic to `main.ts` to append `/opt/homebrew/bin` and `/usr/local/bin`, and rebuilt/copied the DMG.
+- 2026-06-07 Round 3: Identified and fixed missing `NSMicrophoneUsageDescription` in `package.json`'s `mac.extendInfo` config to correctly prompt for macOS microphone permission in the packaged app. Added unit tests to assert the description is present.
+- 2026-06-07 Round 2: Diagnosed ASR crash in packaged macOS app due to missing asarUnpack configuration for platform-specific sherpa-onnx binaries and C++ async worker crash bug in createAsync. Added native dependencies to asarUnpack config, updated test assertions, changed OfflineRecognizer instantiation to synchronous to prevent crash, and built/verified the DMG package. All tests passed.
 - 2026-04-30 Round 1: User reported six current usability issues across streaming, translation, hotkeys, settings apply flow, and launch-at-login verification. Priorities captured for follow-up.
 
 ## Blockers
 
 - None currently recorded for the remaining desktop usability fixes.
+

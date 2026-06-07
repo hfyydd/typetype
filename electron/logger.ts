@@ -27,7 +27,11 @@ export function getLogDirectory(): string {
   }
 
   if (app?.isPackaged) {
-    return path.dirname(app.getPath('exe'));
+    try {
+      return app.getPath('logs');
+    } catch {
+      return path.join(app.getPath('userData'), 'logs');
+    }
   }
 
   return process.cwd();
