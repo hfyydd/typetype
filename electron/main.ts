@@ -10,6 +10,7 @@ import {
   powerMonitor,
   clipboard,
   screen,
+  systemPreferences,
 } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -389,6 +390,9 @@ class TypenewApp {
     this.createOverlayWindow();
     this.createTray();
     this.applyLoginItemSettings(this.settingsStore.getSettings());
+    if (process.platform === 'darwin') {
+      this.requestMacPermissions();
+    }
     try {
       this.registerShortcut();
     } catch (error) {
@@ -397,6 +401,36 @@ class TypenewApp {
       this.showSettingsWindow();
     }
     this.startStartupPreload();
+  }
+
+  private requestMacPermissions(): void {
+    if (process.platform !== 'darwin') {
+      return;
+    }
+
+    try {
+      // Request Accessibility permission (registers app and prompts user if not granted)
+      const isAccessibilityGranted = systemPreferences.isTrustedAccessibilityClient(false);
+      console.log('Mac Accessibility status:', isAccessibilityGranted);
+      if (!isAccessibilityGranted) {
+        systemPreferences.isTrustedAccessibilityClient(true);
+      }
+
+      // Request Microphone permission (registers app and prompts user if not granted)
+      const microphoneStatus = systemPreferences.getMediaAccessStatus('microphone');
+      console.log('Mac Microphone status:', microphoneStatus);
+      if (microphoneStatus !== 'granted') {
+        systemPreferences.askForMediaAccess('microphone')
+          .then((granted) => {
+            console.log('Mac Microphone permission request result:', granted);
+          })
+          .catch((err) => {
+            console.error('Failed to request Mac microphone access:', err);
+          });
+      }
+    } catch (error) {
+      console.error('Failed to request Mac permissions:', error);
+    }
   }
 
   private registerIpcHandlers(): void {

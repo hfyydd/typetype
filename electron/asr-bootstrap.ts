@@ -172,7 +172,7 @@ async function extractModelArchive(archivePath: string, modelsDir: string, model
 
   try {
     const fileContent = fs.readFileSync(archivePath);
-    const decompressed = bzip2.decompress(fileContent);
+    const decompressed = bzip2.simple(bzip2.array(fileContent));
     const extractor = tar.extract();
 
     await new Promise<void>((resolve, reject) => {
@@ -206,7 +206,7 @@ async function extractModelArchive(archivePath: string, modelsDir: string, model
       });
 
       extractor.on('error', reject);
-      extractor.end(decompressed);
+      extractor.end(Buffer.from(decompressed));
     });
 
     if (!modelDirectoryHasRequiredFiles(modelDir)) {

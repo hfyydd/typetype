@@ -1,6 +1,6 @@
 {
   "name": "typetype",
-  "version": "0.3.2",
+  "version": "0.3.4",
   "description": "typetype local voice input tool with offline ASR",
   "main": "dist-electron/main.js",
   "author": "typetype",
@@ -9,8 +9,9 @@
     "dev": "npm run build:electron && electron .",
     "build:electron": "node -e \"require('fs').rmSync('dist-electron',{recursive:true,force:true})\" && tsc -p tsconfig.json",
     "build:code-switch-lexicon": "node scripts/build_code_switch_lexicon.js",
-    "build": "npm run build:electron && electron-builder --mac",
-    "build:mac": "npm run build:electron && electron-builder --mac"
+    "build": "npm run build:electron && npm install sherpa-onnx-darwin-arm64 sherpa-onnx-darwin-x64 --no-save --force && electron-builder --mac",
+    "build:mac": "npm run build:electron && npm install sherpa-onnx-darwin-arm64 sherpa-onnx-darwin-x64 --no-save --force && electron-builder --mac",
+    "build:win": "npm run build:electron && npm install sherpa-onnx-win-x64 --no-save --force && electron-builder --win --x64"
   },
   "dependencies": {
     "@huggingface/tokenizers": "^0.1.3",

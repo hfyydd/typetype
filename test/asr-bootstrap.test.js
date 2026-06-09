@@ -317,3 +317,73 @@ test("initializeAsrEngine returns null instead of throwing when temp download fi
 
   assert.equal(engine, null);
 });
+
+test("initializeAsrEngine successfully downloads and decompresses model archive", async () => {
+  const fs = require("fs");
+  const path = require("path");
+  const os = require("os");
+  const cp = require("child_process");
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "typetype-test-"));
+  const modelDirName = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09";
+  const srcDir = path.join(tmpDir, modelDirName);
+  fs.mkdirSync(srcDir);
+  fs.writeFileSync(path.join(srcDir, "tokens.txt"), "tokens content");
+  fs.writeFileSync(path.join(srcDir, "model.int8.onnx"), "model content");
+
+  const archivePath = path.join(tmpDir, "archive.tar.bz2");
+  cp.execSync(`tar -cf - -C "${tmpDir}" "${modelDirName}" | bzip2 > "${archivePath}"`);
+  const archiveBuffer = fs.readFileSync(archivePath);
+
+  // Clean up source dir to verify decompression recreates it
+  fs.rmSync(srcDir, { recursive: true, force: true });
+
+  const { initializeAsrEngine } = loadAsrBootstrapWithMocks({
+    findModelPath(paths) {
+      // Return null on first check to force download,
+      // but find the model on second check (after download/extraction finishes)
+      const found = paths.some(p => p.includes(modelDirName) && fs.existsSync(path.join(p, "tokens.txt")));
+      if (found) {
+        return {
+          modelPath: path.join(paths[0], "model.int8.onnx"),
+          tokensPath: path.join(paths[0], "tokens.txt"),
+        };
+      }
+      return null;
+    },
+    async initialize() {},
+    moduleMocks: {
+      https: createHttpsMock({
+        response: {
+          statusCode: 200,
+          headers: { "content-length": String(archiveBuffer.length) },
+          body: archiveBuffer,
+        },
+      }),
+      // We do NOT mock fs so that real filesystem operations are tested
+    },
+  });
+
+  const targetDataDir = path.join(tmpDir, "target-data");
+  const engine = await initializeAsrEngine({
+    dataDir: targetDataDir,
+    settings: createSettings({
+      pinned_model_version: "sherpa-onnx-sense-voice",
+    }),
+    processResourcesPath: "/Applications/typetype.app/Contents/Resources",
+    appPath: "/Applications/typetype.app/Contents/Resources/app.asar",
+  });
+
+  assert.ok(engine);
+  // Verify files were extracted correctly
+  const extractedModelPath = path.join(targetDataDir, "models", modelDirName, "model.int8.onnx");
+  const extractedTokensPath = path.join(targetDataDir, "models", modelDirName, "tokens.txt");
+  assert.ok(fs.existsSync(extractedModelPath));
+  assert.ok(fs.existsSync(extractedTokensPath));
+  assert.equal(fs.readFileSync(extractedModelPath, "utf8"), "model content");
+  assert.equal(fs.readFileSync(extractedTokensPath, "utf8"), "tokens content");
+
+  // Cleanup
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+
