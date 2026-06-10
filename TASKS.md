@@ -121,3 +121,36 @@ Risks / follow-ups:
   package, etc.) will still cause a brief freeze while the model reloads.
   The user now sees the warming preload status during that window, which
   is the right UX hint.
+- [x] Bump version to 0.3.5 and ship Intel DMG to desktop.
+- [x] Commit: "Prevent settings window freeze on Intel Macs when switching options" (d182aef).
+- [x] Commit: "Bump version to 0.3.5" (e5fb9b0).
+
+## Round 9 Notes — 2026-06-10
+
+Release packaging for the Intel-freeze fix.
+
+- `electron-builder --mac --x64` produced `release/typetype-0.3.5.dmg`
+  (1.15 GB). The .app bundle inside was verified as Mach-O 64-bit
+  x86_64 via `file` and the DMG was verified by `hdiutil verify`
+  (checksum VALID). The DMG was copied to
+  `/Users/hanfeng/Desktop/typetype-0.3.5-x64.dmg` and the SHA-256
+  matches the source artifact.
+- The auto-update `typetype-0.3.5-mac.zip` and its blockmap were NOT
+  produced: electron-builder hung on the x64-only zip stage (CPU
+  flatlined, the .zip grew ~2-3 MB/min for >30 minutes, the underlying
+  process was not making meaningful progress). Killed the process
+  after the .dmg was confirmed good; cleaned up the half-written
+  .zip/.blockmap so they do not appear as a release artifact.
+- This matches the previous round (0.3.4 packaging) in that the
+  x64 DMG was the deliverable, not the auto-update zip.
+
+Risks / follow-ups:
+
+- The 0.3.5 mac.zip for auto-update is not in `release/`. If the
+  in-app updater is wired up, it will need the zip regenerated (or
+  the updater disabled for this release) before pushing 0.3.5 via
+  the existing update channel.
+- Investigate the electron-builder x64 zip stall before the next
+  release. Possible causes: compression interaction with the
+  asarUnpacked native modules, or a notarization step that is
+  timing out without credentials.
