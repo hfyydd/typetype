@@ -60,3 +60,64 @@
 
 - None currently recorded for the remaining desktop usability fixes.
 
+
+- [x] Fix settings window freeze when switching options on Intel Macs (and main-thread block on Apple Silicon).
+
+## Round 8 Notes — 2026-06-10
+
+Root cause: `saveSettings` in `electron/main.ts` always tore down the ASR engine
+(`this.asrEngine = null`) and called `primeAsrEngine()` on every settings save,
+even for keys that have zero impact on recognition (auto_paste, hotkeys, LLM
+config, etc.). `primeAsrEngine()` runs `new sherpaOnnx.OfflineRecognizer(config)`
+in `electron/asr-engine.ts`, which is **synchronous C++ native code** that
+blocks the main process event loop while it reads model files and builds the
+ONNX session. On Intel Macs (no ANE, slower I/O) the block is several seconds
+and the settings window appears frozen; on M-series the same block is shorter
+but the renderer still queues its follow-up IPCs (the redundant
+`refreshSettingsView()` after every save) behind it.
+
+Changes in this round:
+
+- Added `electron/settings-diff.ts` exposing the pure function
+  `isAsrSettingsRelevantChange(previous, next)`. The key list is
+  `recognition_mode`, `streaming_model`, `voice_package`, `compute_backend`,
+  `model_path`, `pinned_model_version` — every other field is treated as
+  recognizer-independent. Covered by `test/settings-diff.test.js` (14 cases).
+- `saveSettings` in `electron/main.ts` now captures the previous settings,
+  runs the diff, and only enqueues an engine reset (via `setImmediate`) when
+  an ASR-relevant key actually changed. The IPC response is returned before
+  the heavy `OfflineRecognizer` constructor runs, so the renderer can update
+  the UI and the user sees the warming preload status instead of a frozen
+  window.
+- `persistSettings` in `src/settings/settings.js` no longer calls
+  `refreshSettingsView()` after `saveSettings` resolves. The main process
+  already pushes the new view through `subscribeSettingsViewData`, so the
+  two extra IPC roundtrips (`getSettingsViewData` + `getDictionaryViewData`)
+  per option change are eliminated. Initial load and explicit "ASR
+  diagnostics" refresh paths still call `refreshSettingsView()` as before.
+
+Verification:
+
+- `node --test 'test/*.test.js'` → 129 pass / 0 fail (including 14 new
+  diff cases).
+- `npm run build:electron` → clean TypeScript compile, no new warnings.
+- Manual verification path: package the app and exercise the settings
+  panel on both Intel and Apple Silicon hardware. The fix targets the
+  known regression; real-hardware measurement was not performed in this
+  session.
+
+Risks / follow-ups:
+
+- The `setImmediate` deferral is a best-effort handoff: if the renderer
+  dispatches another IPC during the same event loop iteration, it can
+  still race the recognizer construction. The expected impact is small
+  (microsecond-level scheduling jitter vs. multi-second model load) and
+  acceptable for the common case.
+- We did not move the recognizer construction off the main thread.
+  A worker-thread shim for sherpa-onnx would let us fully decouple the
+  IPC response from the model load; that is a larger refactor and out of
+  scope here.
+- Settings that *do* require an engine reset (recognition mode, voice
+  package, etc.) will still cause a brief freeze while the model reloads.
+  The user now sees the warming preload status during that window, which
+  is the right UX hint.

@@ -18,6 +18,7 @@ import { spawnSync } from 'child_process';
 
 import { StateMachine } from './state-machine';
 import { SettingsStore } from './settings-store';
+import { isAsrSettingsRelevantChange } from './settings-diff';
 import { AudioRecorder } from './audio-recorder';
 import { AsrEngine } from './asr-engine';
 import { AutoPaste } from './auto-paste';
@@ -1363,19 +1364,37 @@ class TypenewApp {
   }
 
   private async saveSettings(settings: Settings): Promise<UiSnapshot> {
+    // Capture the previous settings BEFORE persisting so we can decide whether
+    // the recognizer actually needs to be torn down. Resetting the ASR engine
+    // runs synchronous native code (sherpa-onnx's OfflineRecognizer / Online
+    // Recognizer constructor) that blocks the main process event loop; on slow
+    // Intel Macs this freezes the settings window for several seconds.
+    const previousSettings = this.settingsStore.getSettings();
     this.settingsStore.saveSettings(settings);
     const normalizedSettings = this.settingsStore.getSettings();
+    const shouldResetAsrEngine = isAsrSettingsRelevantChange(previousSettings, normalizedSettings);
+
     this.registerShortcutsForSettings(normalizedSettings, 'settings-save');
     this.startShortcutWatchdog();
     this.stateMachine.applySettings(normalizedSettings);
     this.applyLoginItemSettings(normalizedSettings);
-    this.asrEngine = null;
-    this.translationAsrEngine = null;
-    this.translationAsrInitializationPromise = null;
     this.preloadLlmStatus();
     this.preloadTranslationStatus();
-    this.primeAsrEngine();
     this.tray?.setContextMenu(this.buildTrayMenu());
+
+    if (shouldResetAsrEngine) {
+      // Defer the engine reset so the IPC response is flushed to the renderer
+      // before the heavy synchronous native constructor runs. primeAsrEngine
+      // publishes a 'warming' preload status synchronously, so the user sees
+      // immediate feedback that the model is reloading.
+      setImmediate(() => {
+        this.asrEngine = null;
+        this.translationAsrEngine = null;
+        this.translationAsrInitializationPromise = null;
+        this.primeAsrEngine();
+      });
+    }
+
     const snapshot = this.stateMachine.snapshot();
     this.publishSnapshot(snapshot);
     this.publishSettingsViewData();

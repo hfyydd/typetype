@@ -894,9 +894,14 @@ async function persistSettings() {
   const generation = ++saveGeneration;
   setStatus("正在保存设置…");
   try {
+    // Persist the new settings. The main process avoids reinitializing the ASR
+    // engine for non-ASR-relevant changes and pushes the fresh view via
+    // `subscribeSettingsViewData`, so we no longer need a second roundtrip
+    // through `refreshSettingsView()` (which previously cost two more IPCs
+    // and made switching options feel laggy on slow Intel Macs).
     const snapshot = await electronAPI.saveSettings(collectSettings());
     currentSettings = structuredClone(snapshot.settings);
-    await refreshSettingsView("设置已自动保存。");
+    setStatus("设置已自动保存。");
   } catch (error) {
     if (generation === saveGeneration) {
       const message = error instanceof Error && error.message
