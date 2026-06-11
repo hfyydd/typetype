@@ -19,8 +19,9 @@ import { spawnSync } from 'child_process';
 import { StateMachine } from './state-machine';
 import { SettingsStore } from './settings-store';
 import { isAsrSettingsRelevantChange } from './settings-diff';
-import { AudioRecorder } from './audio-recorder';
+import { usesRecorderWindow } from './recorder-platform';
 import { AsrEngine } from './asr-engine';
+import { AsrEngineProxy } from './asr-engine-proxy';
 import { AutoPaste } from './auto-paste';
 import { TrayManager, trayStatusForRuntimeStatus } from './tray';
 import { OverlayWindow } from './overlay';
@@ -71,15 +72,6 @@ import { CodeSwitchLexicon } from './code-switch-lexicon';
 import { AiRewriteGate } from './ai-rewrite-gate';
 import { SemanticPunctuationEngine } from './semantic-punctuation-engine';
 
-// Fix PATH env variable for packaged apps on macOS to support locating Homebrew's sox
-if (process.platform === 'darwin') {
-  const commonPaths = ['/opt/homebrew/bin', '/usr/local/bin'];
-  const currentPath = process.env.PATH || '';
-  const pathsToAppend = commonPaths.filter(p => !currentPath.split(path.delimiter).includes(p) && fs.existsSync(p));
-  if (pathsToAppend.length > 0) {
-    process.env.PATH = [...pathsToAppend, ...currentPath.split(path.delimiter)].join(path.delimiter);
-  }
-}
 
 const FEEDBACK_EMAIL = 'feedback@typetype.app';
 const WINDOWS_LOGIN_ITEM_NAME = 'typetype';
@@ -111,8 +103,7 @@ function defaultPreloadStatus(): PreloadStatusView {
 class TypenewApp {
   private stateMachine: StateMachine;
   private settingsStore: SettingsStore;
-  private audioRecorder: AudioRecorder | null = null;
-  private asrEngine: AsrEngine | null = null;
+  private asrEngine: AsrEngineProxy | null = null;
   private autoPaste: AutoPaste;
   private trayManager: TrayManager;
   private overlayWindow: OverlayWindow | null = null;
@@ -124,6 +115,7 @@ class TypenewApp {
   private previousAppBundleId: string | null = null;
   private isQuitting = false;
   private asrInitializationPromise: Promise<void> | null = null;
+  private asrEngineNeedsReset = false;
   private asrInitializationError: Error | null = null;
   private isAsrInitializing = false;
   private asrInitializationGeneration = 0;
@@ -131,11 +123,12 @@ class TypenewApp {
   private transcriptionRunId = 0;
   private stopOverlayTimer: ReturnType<typeof setTimeout> | null = null;
   private recorderWindowReadyPromise: Promise<void> | null = null;
-  private translationAsrEngine: AsrEngine | null = null;
-  private translationAsrInitializationPromise: Promise<AsrEngine | null> | null = null;
+  private translationAsrEngine: AsrEngineProxy | null = null;
+  private translationAsrInitializationPromise: Promise<AsrEngineProxy | null> | null = null;
   private pendingRecorderStart:
     | { resolve: () => void; reject: (error: Error) => void }
     | null = null;
+  private accessibilityPromptedThisSession = false;
   private pendingRecorderResult:
     | { resolve: (samples: Float32Array) => void; reject: (error: Error) => void }
     | null = null;
@@ -149,6 +142,7 @@ class TypenewApp {
   private streamingPastePendingText = '';
   private streamingPasteInFlight = false;
   private streamingAutoPasteSuspended = false;
+
   private streamingSessionId = 0;
   private streamingChunkLogCount = 0;
   private streamingSegmenter: StreamingSegmenter | null = null;
@@ -392,7 +386,17 @@ class TypenewApp {
     this.createTray();
     this.applyLoginItemSettings(this.settingsStore.getSettings());
     if (process.platform === 'darwin') {
-      this.requestMacPermissions();
+      // Silent read only. The accessibility permission is requested the
+      // first time the user actually exercises auto-paste (in
+      // enqueueStreamingPaste / outputTranscript). Prompts from
+      // initialize() have been observed to interact badly with the
+      // shortcut watchdog and the start/stop race in startRecording() on
+      // slow Intel hardware, so we do not proactively prompt here. The
+      // startRecording() and enqueueStreamingPaste() paths are kept
+      // identical to 0.3.11/0.3.12.
+      const permStatus = this.getMacPermissionsStatus();
+      console.log('Mac Accessibility status:', permStatus.accessibility);
+      console.log('Mac Microphone status:', permStatus.microphone);
     }
     try {
       this.registerShortcut();
@@ -404,33 +408,71 @@ class TypenewApp {
     this.startStartupPreload();
   }
 
-  private requestMacPermissions(): void {
+  // Read-only snapshot of the current macOS permission status.
+  // The renderer reads this via the `get_mac_permissions` IPC and
+  // uses it to surface banners / "Open System Settings" buttons.
+  // Never triggers a system prompt.
+  getMacPermissionsStatus(): { accessibility: boolean; microphone: string } {
     if (process.platform !== 'darwin') {
-      return;
+      return { accessibility: true, microphone: 'granted' };
     }
-
     try {
-      // Request Accessibility permission (registers app and prompts user if not granted)
-      const isAccessibilityGranted = systemPreferences.isTrustedAccessibilityClient(false);
-      console.log('Mac Accessibility status:', isAccessibilityGranted);
-      if (!isAccessibilityGranted) {
-        systemPreferences.isTrustedAccessibilityClient(true);
-      }
-
-      // Request Microphone permission (registers app and prompts user if not granted)
-      const microphoneStatus = systemPreferences.getMediaAccessStatus('microphone');
-      console.log('Mac Microphone status:', microphoneStatus);
-      if (microphoneStatus !== 'granted') {
-        systemPreferences.askForMediaAccess('microphone')
-          .then((granted) => {
-            console.log('Mac Microphone permission request result:', granted);
-          })
-          .catch((err) => {
-            console.error('Failed to request Mac microphone access:', err);
-          });
-      }
+      return {
+        accessibility: systemPreferences.isTrustedAccessibilityClient(false),
+        microphone: systemPreferences.getMediaAccessStatus('microphone'),
+      };
     } catch (error) {
-      console.error('Failed to request Mac permissions:', error);
+      console.error('Failed to read Mac permission status:', error);
+      return { accessibility: false, microphone: 'not-determined' };
+    }
+  }
+
+  // Standard check-then-request pattern: read the current status
+  // first, and only call the request API if the permission is not
+  // already granted. The macOS request APIs are idempotent on the
+  // OS side, so this is the only place that has to think about
+  // not double-prompting the user.
+  //
+  // Behaviour by status:
+  //  - granted         → no API call, returns true immediately.
+  //  - not-determined  → calls the request API; resolves with
+  //                      the user's answer (true / false).
+  //  - denied          → does NOT re-prompt (the OS would ignore
+  //                      it anyway). Logs a hint and returns false
+  //                      so the caller can fall back gracefully.
+  //
+  // Used both by the IPC `request_mac_permission` handler (settings
+  // panel button) and by the lazy guard in `startRecording()`.
+  async ensureMacPermission(type: 'accessibility' | 'microphone'): Promise<boolean> {
+    if (process.platform !== 'darwin') {
+      return true;
+    }
+    try {
+      if (type === 'accessibility') {
+        const granted = systemPreferences.isTrustedAccessibilityClient(false);
+        if (granted) return true;
+        // First-time prompt: shows the "Open System Settings" dialog.
+        // Returns true once the user has actually enabled the toggle
+        // in System Settings (which they must do manually).
+        const prompted = systemPreferences.isTrustedAccessibilityClient(true);
+        return prompted;
+      }
+      const status = systemPreferences.getMediaAccessStatus('microphone');
+      if (status === 'granted') return true;
+      if (status === 'denied') {
+        console.warn(
+          'Mac Microphone access is denied. Open System Settings -> ' +
+          'Privacy & Security -> Microphone and enable typetype to record audio.'
+        );
+        return false;
+      }
+      // status === 'not-determined' — first-time prompt
+      const granted = await systemPreferences.askForMediaAccess('microphone');
+      console.log('Mac Microphone permission request result:', granted);
+      return granted;
+    } catch (error) {
+      console.error(`Failed to ensure Mac ${type} permission:`, error);
+      return false;
     }
   }
 
@@ -445,6 +487,8 @@ class TypenewApp {
       () => this.openInputMonitoringSettings(),
       () => this.openLogDirectory(),
       () => this.openFeedbackEmail(),
+      () => this.getMacPermissionsStatus(),
+      (type) => this.ensureMacPermission(type),
       () => this.runAsrDiagnostics(),
       () => this.startRecording(),
       () => this.stopRecording(),
@@ -504,7 +548,7 @@ class TypenewApp {
         samplesBuffer.byteOffset,
         samplesBuffer.byteLength / Float32Array.BYTES_PER_ELEMENT
       ).slice();
-      this.handleRecordingSamples(samples);
+      void this.handleRecordingSamples(samples);
     });
 
     ipcMain.on('recorder_started', () => {
@@ -751,6 +795,14 @@ class TypenewApp {
         status_text: 'AI 修正原文已带入，后续语音会继续追加。',
         last_error: null,
       }, { immediate: true });
+    } else if (replaceResult.status === 'failed' && replaceResult.code === 'accessibility_required') {
+      await this.autoPaste.writeClipboard(refinedText);
+      await this.promptForAccessibilityForAutoPaste();
+      this.patchStreamingAiPanelState({
+        apply_status_text: '需要 macOS 辅助功能权限才能自动带入；已复制 AI 修正原文，请按提示授权后手动粘贴。',
+        status_text: '一键带入暂停，请先开启辅助功能权限。',
+        last_error: replaceResult.error ?? replaceResult.status,
+      }, { immediate: true });
     } else {
       if (replaceResult.status !== 'clipboard_changed') {
         await this.autoPaste.writeClipboard(refinedText);
@@ -791,6 +843,9 @@ class TypenewApp {
           : '目标输入框未接住整理稿，已复制到剪贴板。',
         last_error: pasteResult.ok ? null : pasteResult.error ?? 'paste_summary_failed',
       }, { immediate: true });
+      if (!pasteResult.ok && process.platform === 'darwin' && !systemPreferences.isTrustedAccessibilityClient(false)) {
+        await this.promptForAccessibilityForAutoPaste();
+      }
       return this.getStreamingAiPanelState();
     }
 
@@ -811,6 +866,14 @@ class TypenewApp {
         status_text: '整理稿已带入。',
         last_error: null,
       }, { immediate: true });
+    } else if (replaceResult.status === 'failed' && replaceResult.code === 'accessibility_required') {
+      await this.autoPaste.writeClipboard(summaryText);
+      await this.promptForAccessibilityForAutoPaste();
+      this.patchStreamingAiPanelState({
+        apply_status_text: '需要 macOS 辅助功能权限才能自动带入；已复制整理稿，请按提示授权后手动粘贴。',
+        status_text: '一键带入暂停，请先开启辅助功能权限。',
+        last_error: replaceResult.error ?? replaceResult.status,
+      }, { immediate: true });
     } else {
       await this.autoPaste.writeClipboard(summaryText);
       this.patchStreamingAiPanelState({
@@ -824,7 +887,7 @@ class TypenewApp {
   }
 
   private async ensureRecorderWindow(): Promise<void> {
-    if (process.platform !== 'win32') {
+    if (!usesRecorderWindow()) {
       return;
     }
 
@@ -957,7 +1020,7 @@ class TypenewApp {
       this.applyStopIntent(intent);
       void this.stopRecording();
     } else if (status === 'transcribing' || status === 'translating') {
-      this.stopThinking();
+      void this.stopThinking();
     }
   }
 
@@ -968,7 +1031,7 @@ class TypenewApp {
 
     if (this.activeCaptureIntent === 'dictation' && intent === 'translation') {
       if (this.shouldUseStreamingForActiveCapture()) {
-        this.cancelStreamingOutputSession('switch-to-translation');
+        void this.cancelStreamingOutputSession('switch-to-translation');
       }
       this.activeCaptureIntent = 'translation';
       console.log('Recording intent switched to translation');
@@ -1059,6 +1122,47 @@ class TypenewApp {
     } catch (error) {
       console.error('Failed to repair global shortcuts:', error);
     }
+  }
+
+  private markAsrEnginePending(): void {
+    this.asrEngineNeedsReset = true;
+    this.asrEngine = null;
+    this.translationAsrEngine = null;
+    this.translationAsrInitializationPromise = null;
+    // Bump the generation so any in-flight init (e.g. an app-startup preload
+    // that is still running synchronous native code) gets cancelled by the
+    // generation check in initializeAsrEngine's .finally. Otherwise the
+    // stale init would complete and overwrite our 'warming' status with a
+    // misleading 'ready' even though the loaded model no longer matches the
+    // user's new settings.
+    this.asrInitializationGeneration += 1;
+    // Flip the user-visible state to "preparing" RIGHT NOW so the settings
+    // panel shows progress the moment the user drops the dropdown, instead
+    // of the confusing '未启动' status we showed previously. The
+    // actual sherpa-onnx recognizer constructor is still synchronous C++
+    // (it lives on the main thread; moving it to a worker is a larger
+    // refactor), but we defer it via setImmediate so the IPC response for
+    // the settings save is flushed before the main process is blocked.
+    this.isAsrInitializing = true;
+    this.preloadStatus.asr = {
+      status: 'warming',
+      label: '识别引擎',
+      detail: '识别设置已更改，正在后台重新加载识别引擎。',
+    };
+    this.publishSettingsViewData();
+
+    setImmediate(() => {
+      // ensureAsrEngineReady / getNonStreamingAsrEngine may already have
+      // picked up the flag and started a fresh init if the user pressed
+      // the hotkey between this setImmediate being scheduled and firing.
+      // Only start a new init if the flag is still set, otherwise we'd run
+      // the heavy recognizer constructor twice.
+      if (!this.asrEngineNeedsReset) {
+        return;
+      }
+      this.asrEngineNeedsReset = false;
+      this.primeAsrEngine();
+    });
   }
 
   private primeAsrEngine(): void {
@@ -1200,6 +1304,13 @@ class TypenewApp {
   }
 
   private async ensureAsrEngineReady(): Promise<void> {
+    if (this.asrEngineNeedsReset) {
+      // Settings changed since the last reload. Drop the stale promise so
+      // primeAsrEngine() starts a fresh initialization against the new
+      // recognition_mode / streaming_model / voice_package / etc.
+      this.asrInitializationPromise = null;
+      this.asrEngineNeedsReset = false;
+    }
     if (!this.asrInitializationPromise) {
       this.primeAsrEngine();
     }
@@ -1261,6 +1372,77 @@ class TypenewApp {
     if (process.platform === 'darwin') {
       shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility');
     }
+  }
+
+  private resetAccessibilityPermission(): void {
+    if (process.platform === 'darwin') {
+      try {
+        const { exec } = require('child_process');
+        exec('tccutil reset Accessibility app.typetype', (error: any, stdout: any, stderr: any) => {
+          if (error) {
+            console.error('Failed to reset Accessibility permission via tccutil:', error);
+          } else {
+            console.log('Successfully reset Accessibility permission via tccutil');
+          }
+        });
+      } catch (err) {
+        console.error('Failed to run tccutil reset command:', err);
+      }
+    }
+  }
+
+  // Show a native dialog explaining that auto-paste needs accessibility,
+  // and on confirmation open both the system settings page and the typetype
+  // settings window (so the user lands on the permissions row). The same
+  // dialog is used by every caller that hits the `accessibility_required`
+  // error code: streaming AI panel "One-click import", streaming final
+  // text replacement, and AI-rewrite background replacement.
+  //
+  // Returns true if the user confirmed (i.e. should retry after the
+  // OS prompt is satisfied); false if the user cancelled. On non-macOS
+  // platforms this is a no-op that always returns true.
+  private async promptForAccessibilityForAutoPaste(): Promise<boolean> {
+    if (process.platform !== 'darwin') {
+      return true;
+    }
+    if (this.accessibilityPromptedThisSession) {
+      return false;
+    }
+    this.accessibilityPromptedThisSession = true;
+
+    const message =
+      '一键带入需要 macOS 辅助功能权限来重新写入光标处的文字。\n\n' +
+      '【提示】如果您在系统设置中已经勾选了 typetype，但仍然提示此错误，这是由于 macOS 缓存了旧版本程序的特征导致的（例如 M 版和 Intel 版混用）。\n\n' +
+      '请点击“修复并打开设置”来重置该权限，然后在打开的系统设置中重新勾选 typetype 即可恢复正常。';
+    const result = await dialog.showMessageBox({
+      type: 'info',
+      message: '需要辅助功能权限',
+      detail: message,
+      buttons: ['修复并打开设置', '直接打开系统设置', '取消'],
+      defaultId: 0,
+      cancelId: 2,
+      noLink: true,
+    });
+
+    if (result.response === 2) {
+      return false;
+    }
+
+    if (result.response === 0) {
+      this.resetAccessibilityPermission();
+    }
+
+    this.openAccessibilitySettings();
+    this.showSettingsWindow();
+    this.navigateSettingsWindowToPanel('panel-permissions');
+    return true;
+  }
+
+  private navigateSettingsWindowToPanel(panelId: string): void {
+    if (!this.settingsWindow || this.settingsWindow.isDestroyed()) {
+      return;
+    }
+    this.settingsWindow.webContents.send('settings_navigate_to_panel', panelId);
   }
 
   private openMicrophoneSettings(): void {
@@ -1383,16 +1565,14 @@ class TypenewApp {
     this.tray?.setContextMenu(this.buildTrayMenu());
 
     if (shouldResetAsrEngine) {
-      // Defer the engine reset so the IPC response is flushed to the renderer
-      // before the heavy synchronous native constructor runs. primeAsrEngine
-      // publishes a 'warming' preload status synchronously, so the user sees
-      // immediate feedback that the model is reloading.
-      setImmediate(() => {
-        this.asrEngine = null;
-        this.translationAsrEngine = null;
-        this.translationAsrInitializationPromise = null;
-        this.primeAsrEngine();
-      });
+      // Mark the engine for reload on the next recording start instead of
+      // tearing it down right now. primeAsrEngine() runs the synchronous
+      // sherpa-onnx recognizer constructor, which blocks the main process
+      // event loop for several seconds on slow Intel Macs and freezes the
+      // settings window. ensureAsrEngineReady() / getNonStreamingAsrEngine()
+      // will pick up the flag and reload just-in-time when the user actually
+      // presses the hotkey, where a brief 'warming' overlay is expected.
+      this.markAsrEnginePending();
     }
 
     const snapshot = this.stateMachine.snapshot();
@@ -1541,11 +1721,38 @@ class TypenewApp {
       return;
     }
 
+    // Lazy macOS microphone prompt: only fires when the system status is
+    // `not-determined`. Once the user has answered, we never re-prompt
+    // (the OS will only show its dialog the first time anyway). This is
+    // what keeps the app quiet on subsequent launches when the user has
+    // already granted or denied the permission.
+    const micOk = await this.ensureMacPermission('microphone');
+    if (!micOk) {
+      console.warn('Cannot start recording: Mac microphone access is not granted');
+      return;
+    }
+
+    // Accessibility is *not* re-checked here. The earlier 0.3.13
+    // revision called the accessibility permission API in this
+    // path, which routes through systemPreferences
+    // .isTrustedAccessibilityClient(true). On slow Intel macOS that
+    // call can block the main process for the duration of the native
+    // accessibility prompt, which (a) freezes the shortcut handler so
+    // the stop hotkey is silently lost and (b) interacts with the
+    // 600ms RECORDING_STOP_GUARD_MS in handleShortcutToggle so the
+    // second hotkey press sometimes goes to startRecording() again
+    // instead of stopRecording(). Auto-paste is best-effort: if the
+    // user has not granted accessibility, paste fails at runtime
+    // and we surface that via the overlay (see outputTranscript() and
+    // flushStreamingPasteQueue()). This keeps the recording pipeline
+    // identical to 0.3.11/0.3.12, which the user has confirmed was
+    // working before the 0.3.13 round.
     this.activeCaptureIntent = intent;
     this.previousAppBundleId = await this.captureOutputTarget();
 
     try {
       const settings = this.settingsStore.getSettings();
+      this.accessibilityPromptedThisSession = false;
       this.streamingSessionId += 1;
       this.streamingChunkLogCount = 0;
       this.streamingPastedText = '';
@@ -1561,7 +1768,7 @@ class TypenewApp {
       this.streamingLastPasteAt = 0;
       this.streamingSegmenter = null;
       this.streamingAudioCache.reset();
-      const recorderReadyPromise = process.platform === 'win32'
+      const recorderReadyPromise = usesRecorderWindow()
         ? this.ensureRecorderWindow()
         : Promise.resolve();
       const asrReadyPromise = this.shouldUseStreamingForIntent(intent)
@@ -1575,8 +1782,11 @@ class TypenewApp {
         if (!this.asrEngine) {
           throw this.asrInitializationError ?? new Error('ASR engine not initialized');
         }
+        if (!this.asrEngine) {
+          throw this.asrInitializationError ?? new Error('ASR engine not initialized');
+        }
         if (!this.isActiveSegmentedStreamingMode(settings)) {
-          this.asrEngine.startStreamingSession();
+          await this.asrEngine.startStreamingSession();
         }
         this.streamingSegmenter = new StreamingSegmenter();
         console.log('Streaming ASR session started', {
@@ -1585,7 +1795,7 @@ class TypenewApp {
         });
       }
 
-      if (process.platform === 'win32') {
+      if (usesRecorderWindow()) {
         await recorderReadyPromise;
         await new Promise<void>((resolve, reject) => {
           this.pendingRecorderStart = { resolve, reject };
@@ -1594,19 +1804,7 @@ class TypenewApp {
           });
         });
       } else {
-        const recordingsDir = path.join(this.getDataDir(), 'recordings');
-        this.audioRecorder = new AudioRecorder(
-          recordingsDir,
-          settings.microphone_id
-        );
-        this.audioRecorder.setWaveformCallback((waveform) => {
-          this.stateMachine.updateWaveform(waveform);
-          this.publishSnapshot();
-        });
-        this.audioRecorder.setSamplesCallback((samples) => {
-          this.handleRecordingSamples(samples);
-        });
-        this.audioRecorder.start();
+        throw new Error(`Audio recording is not supported on ${process.platform}`);
       }
     } catch (e) {
       console.error('Failed to start recording:', e);
@@ -1626,26 +1824,15 @@ class TypenewApp {
   }
 
   private async stopRecording(): Promise<void> {
-    if (process.platform === 'win32') {
-      await this.stopWindowsRecording();
+    if (usesRecorderWindow()) {
+      await this.stopRecorderWindowRecording();
       return;
     }
 
-    if (!this.audioRecorder || !this.audioRecorder.isActive()) {
-      return;
-    }
-
-    const audioChunk = this.audioRecorder.stop();
-    this.audioRecorder = null;
-    if (this.shouldUseStreamingForActiveCapture()) {
-      await this.finishStreamingOutput();
-      return;
-    }
-
-    this.beginTranscribing(audioChunk.samples);
+    throw new Error(`Audio recording is not supported on ${process.platform}`);
   }
 
-  private async stopWindowsRecording(): Promise<void> {
+  private async stopRecorderWindowRecording(): Promise<void> {
     if (!this.recorderWindow) {
       return;
     }
@@ -1662,7 +1849,7 @@ class TypenewApp {
       this.pendingRecorderResult = { resolve, reject };
       this.recorderWindow?.webContents.send('recorder_stop');
     }).catch((error) => {
-      console.error('Windows recorder stop failed:', error);
+      console.error('Recorder window stop failed:', error);
       this.hideOverlayWindow();
       this.stateMachine.dismissOverlay();
       this.updateTrayAnimation();
@@ -1697,7 +1884,7 @@ class TypenewApp {
     });
   }
 
-  private stopThinking(): void {
+  private async stopThinking(): Promise<void> {
     if (this.stateMachine.getStatus() !== 'transcribing' && this.stateMachine.getStatus() !== 'translating') {
       return;
     }
@@ -1705,7 +1892,7 @@ class TypenewApp {
     this.transcriptionRunId += 1;
     this.clearPendingTranscriptionTimer();
     this.clearStopOverlayTimer();
-    this.asrEngine?.cancelStreamingSession();
+    await this.asrEngine?.cancelStreamingSession();
 
     this.stateMachine.stopTranscribing();
     this.showOverlayWindow();
@@ -1781,6 +1968,28 @@ class TypenewApp {
         confidence: asrResult.confidence,
       });
 
+      // 1) Paste the raw ASR transcript into the target app first. The
+      //    user immediately sees the original transcription in the
+      //    foreground input, which is what the auto-paste contract
+      //    promises. We track the result so step 3 can decide whether
+      //    backfill is even meaningful.
+      const autoPasteEnabled = settings.auto_paste;
+      let initialPasteOk = false;
+      if (autoPasteEnabled) {
+        this.streamingInsertionTransaction.reset(this.previousAppBundleId);
+        const initialPasteResult = await this.streamingInsertionTransaction.pasteAppend(
+          cleanedTranscript,
+          cleanedTranscript,
+          this.previousAppBundleId
+        );
+        initialPasteOk = initialPasteResult.status === 'pasted';
+        if (!initialPasteOk && process.platform === 'darwin' && !systemPreferences.isTrustedAccessibilityClient(false)) {
+          await this.promptForAccessibilityForAutoPaste();
+        }
+      }
+
+      // 2) Run the rewrite / translation step. The result `finalText`
+      //    is what we want to end up at the cursor.
       let finalText: string;
       if (this.activeCaptureIntent === 'translation') {
         finalText = await this.translateTranscript(cleanedTranscript);
@@ -1812,7 +2021,44 @@ class TypenewApp {
       });
       console.log('Transcription complete', createTranscriptionLogMeta(finalText));
 
-      await this.outputTranscript(finalText, settings.auto_paste);
+      // 3) If the raw transcript is already on screen and the rewrite
+      //    actually changed something, backfill it in place. This is
+      //    what makes the "thinking" step feel responsive: the user
+      //    sees the ASR text right away, then the rewrite silently
+      //    replaces it without leaving the original characters behind.
+      if (autoPasteEnabled && initialPasteOk && finalText && finalText !== cleanedTranscript) {
+        const replaceResult = await this.streamingInsertionTransaction.replaceInsertedText(
+          finalText,
+          this.previousAppBundleId
+        );
+        if (replaceResult.status === 'replaced') {
+          this.stateMachine.markAutoPasteSuccess();
+          console.log('Non-streaming backfill replaced ASR text with rewrite', {
+            chars_replaced: replaceResult.charsReplaced,
+            rewrite_length: Array.from(finalText).length,
+          });
+        } else if (replaceResult.status === 'failed' && replaceResult.code === 'accessibility_required') {
+          await this.promptForAccessibilityForAutoPaste();
+          console.warn('Non-streaming backfill skipped: macOS accessibility not granted', {
+            error: replaceResult.error,
+          });
+        } else if (replaceResult.status !== 'no_inserted_text') {
+          console.warn('Non-streaming backfill could not replace ASR text', {
+            status: replaceResult.status,
+            error: replaceResult.error,
+          });
+        }
+      }
+
+      // 4) Final fallback write. Always update the clipboard so the
+      //    user can recover with Cmd+V if the auto-paste did not land
+      //    for any reason. The new paste step only runs when the
+      //    initial paste never reached the cursor — otherwise the
+      //    backfill (or even the unchanged initial paste) is already
+      //    the final state and a second Cmd+V would duplicate it.
+      await this.outputTranscript(finalText, autoPasteEnabled, {
+        skipPaste: initialPasteOk,
+      });
       this.publishSnapshot();
 
       // Dismiss overlay after delay
@@ -1835,12 +2081,25 @@ class TypenewApp {
     }
   }
 
-  private async outputTranscript(finalText: string, autoPasteEnabled: boolean): Promise<void> {
-    // 先写剪贴板，再按需执行自动回填，这样即使自动回填失败，
-    // 用户也还能手动粘贴识别结果。
+  private async outputTranscript(
+    finalText: string,
+    autoPasteEnabled: boolean,
+    options: { skipPaste?: boolean } = {}
+  ): Promise<void> {
+    // Always update the clipboard first so the user can recover with
+    // Cmd+V even when auto-paste fails or is disabled.
     await this.autoPaste.writeClipboard(finalText);
 
     if (!autoPasteEnabled) {
+      return;
+    }
+
+    // When the caller already delivered the result to the cursor via
+    // the new non-streaming "backfill" path (transcribeAudio step 3),
+    // there is nothing else to do here. Skipping avoids an extra
+    // Cmd+V that would insert a duplicate copy of the final text.
+    if (options.skipPaste) {
+      this.hideOverlayWindow();
       return;
     }
 
@@ -1849,11 +2108,22 @@ class TypenewApp {
     if (pasteResult.ok) {
       this.stateMachine.markAutoPasteSuccess();
     } else {
+      // Without the overlay patch the user sees a successful
+      // transcription and then nothing happens in the foreground app,
+      // which they read as "识别没出来" or "模型没识别". The transcript
+      // is already on the clipboard, but they need to know that and
+      // why the auto-paste did not run. Patching the panel state is the
+      // existing channel; if streaming_ai_panel_enabled is off the
+      // patch still goes through state and any future UI read will
+      // see it, and the console.warn below covers the log trail.
       console.warn('Auto paste failed; transcript remains on clipboard', {
         error: pasteResult.error,
         target: pasteResult.targetAppId,
         foreground: pasteResult.foregroundAppId,
       });
+      if (process.platform === 'darwin' && !systemPreferences.isTrustedAccessibilityClient(false)) {
+        await this.promptForAccessibilityForAutoPaste();
+      }
     }
   }
 
@@ -1879,7 +2149,12 @@ class TypenewApp {
     return this.shouldUseStreamingForIntent(this.activeCaptureIntent);
   }
 
-  private async getNonStreamingAsrEngine(): Promise<AsrEngine | null> {
+  private async getNonStreamingAsrEngine(): Promise<AsrEngineProxy | null> {
+    if (this.asrEngineNeedsReset) {
+      this.translationAsrEngine = null;
+      this.translationAsrInitializationPromise = null;
+      this.asrEngineNeedsReset = false;
+    }
     if (this.translationAsrEngine) {
       return this.translationAsrEngine;
     }
@@ -1915,7 +2190,7 @@ class TypenewApp {
     return this.translationAsrInitializationPromise;
   }
 
-  private async getAsrEngineForTranscription(): Promise<AsrEngine | null> {
+  private async getAsrEngineForTranscription(): Promise<AsrEngineProxy | null> {
     if (this.activeCaptureIntent !== 'translation' || translationSupportsRecognitionMode(this.settingsStore.getSettings().recognition_mode)) {
       await this.ensureAsrEngineReady();
       return this.asrEngine;
@@ -2072,9 +2347,9 @@ class TypenewApp {
     this.publishSettingsViewData();
   }
 
-  private cancelStreamingOutputSession(reason: string): void {
+  private async cancelStreamingOutputSession(reason: string): Promise<void> {
     this.streamingSessionId += 1;
-    this.asrEngine?.cancelStreamingSession();
+    await this.asrEngine?.cancelStreamingSession();
     this.streamingLatestText = '';
     this.streamingPastedText = '';
     this.streamingPastedSourceText = '';
@@ -2487,6 +2762,13 @@ class TypenewApp {
             status_text: '最终整理稿已生成，AI 修正原文已后台替换。',
             last_error: null,
           }, { immediate: true });
+        } else if (replaceResult.status === 'failed' && replaceResult.code === 'accessibility_required') {
+          await this.promptForAccessibilityForAutoPaste();
+          this.patchStreamingAiPanelState({
+            apply_status_text: 'AI 修正原文已生成，但 macOS 辅助功能未授权，未自动替换。',
+            status_text: '后台替换暂停，请先在系统设置中开启辅助功能。',
+            last_error: replaceResult.error ?? replaceResult.status,
+          }, { immediate: true });
         } else if (replaceResult.status !== 'no_inserted_text') {
           this.patchStreamingAiPanelState({
             apply_status_text: replaceResult.status === 'clipboard_changed'
@@ -2632,6 +2914,12 @@ class TypenewApp {
             status_text: '自动回填暂停，请点回微信输入框后手动粘贴或重新开始。',
             last_error: result.error ?? 'streaming_paste_failed',
           }, { immediate: true });
+          // We intentionally do NOT auto-open System Settings here:
+          // streaming paste failures happen mid-recording and stealing
+          // focus to System Settings would interrupt the user. The
+          // non-streaming outputTranscript() path is where the user
+          // has stopped and is back in the foreground, so it is the
+          // better place to nudge them toward the Accessibility toggle.
           break;
         }
       }
@@ -2640,11 +2928,14 @@ class TypenewApp {
       this.streamingAutoPasteSuspended = true;
       this.streamingPastePendingText = '';
       await this.autoPaste.writeClipboard(this.streamingLatestText || this.streamingPastedSourceText || this.streamingOutputText);
+      const errorMessage = error instanceof Error ? error.message : String(error);
       this.patchStreamingAiPanelState({
         apply_status_text: '实时输出失败，已暂停自动追加；识别内容仍在剪贴板。',
         status_text: '自动回填暂停，请点回目标输入框后手动粘贴。',
-        last_error: error instanceof Error ? error.message : String(error),
+        last_error: errorMessage,
       }, { immediate: true });
+      // No auto-open here either — same reason as the pasteAppend
+      // failure branch above: this is mid-recording.
     } finally {
       this.streamingPasteInFlight = false;
       if (this.streamingPastePendingText && sessionId === this.streamingSessionId) {
@@ -2659,7 +2950,7 @@ class TypenewApp {
     }
   }
 
-  private handleRecordingSamples(samples: Float32Array): void {
+  private async handleRecordingSamples(samples: Float32Array): Promise<void> {
     if (!this.shouldUseStreamingForActiveCapture() || this.stateMachine.getStatus() !== 'recording') {
       return;
     }
@@ -2765,7 +3056,7 @@ class TypenewApp {
           return;
         }
 
-        const text = this.asrEngine?.acceptStreamingAudio(samples) ?? '';
+        const text = await this.asrEngine?.acceptStreamingAudio(samples) ?? '';
         if (this.streamingChunkLogCount <= 5 || this.streamingChunkLogCount % 20 === 0 || text.length > 0) {
           console.log('Streaming ASR chunk decoded', {
             sessionId,
@@ -2841,7 +3132,7 @@ class TypenewApp {
 
     const finalRawText = this.isActiveSegmentedStreamingMode(settings)
       ? (this.streamingLatestText || this.streamingOutputText || this.streamingPastedSourceText)
-      : (this.asrEngine?.finishStreamingSession() ?? '');
+      : (await this.asrEngine?.finishStreamingSession() ?? '');
     const cleanedStreamingText = this.cleanupTranscriptWithDictionary(
       finalRawText || this.streamingLatestText || this.streamingOutputText,
       settings
@@ -2903,6 +3194,17 @@ class TypenewApp {
             chars_replaced: replaceResult.charsReplaced,
             final_length: Array.from(finalText).length,
           });
+        } else if (replaceResult.status === 'failed' && replaceResult.code === 'accessibility_required') {
+          console.warn('Streaming final text could not be replaced: macOS accessibility not granted', {
+            pasted_length: this.streamingPastedSourceText.length,
+            final_length: finalText.length,
+            error: replaceResult.error,
+          });
+          this.patchStreamingAiPanelState({
+            apply_status_text: '最终文本已生成，但 macOS 辅助功能未授权，未自动替换。',
+            status_text: '自动回填暂停，请在设置中开启辅助功能后再次一键带入。',
+            last_error: replaceResult.error ?? replaceResult.status,
+          }, { immediate: true });
         } else {
           console.warn('Streaming final text diverged from pasted partials and could not be replaced', {
             status: replaceResult.status,

@@ -56,39 +56,63 @@ function stopChunkFlushLoop() {
   }
 }
 
-function cleanupStream() {
+// Tears down every audio-graph node and releases the OS input device.
+// Must be `await`ed: closing the AudioContext is asynchronous on Chromium
+// and macOS will keep the orange mic indicator lit until the context is
+// actually closed. The order is also deliberate — disconnect the source
+// node from the destination graph first, *then* stop the MediaStream
+// tracks, *then* close the context. Stopping the tracks before
+// disconnecting the source node leaves the graph in a half-released state
+// on some Chromium versions and the device is not freed until the next GC.
+async function cleanupStream() {
   stopWaveformLoop();
   stopChunkFlushLoop();
 
-  if (mediaStream) {
-    for (const track of mediaStream.getTracks()) {
-      track.stop();
-    }
-    mediaStream = null;
-  }
-
+  // 1. Stop forwarding audio from captureNode and pull the silent gain off
+  //    the destination so the destination graph has no input source.
   if (sourceNode) {
-    sourceNode.disconnect();
+    try { sourceNode.disconnect(); } catch {}
     sourceNode = null;
   }
 
   if (captureNode) {
-    if ("port" in captureNode) {
+    // Close the worklet port so the processor stops posting messages.
+    // Setting onmessage = null only removes the listener; the processor
+    // would keep running until the AudioContext is actually closed.
+    if ("port" in captureNode && captureNode.port) {
+      try { captureNode.port.close(); } catch {}
       captureNode.port.onmessage = null;
     } else {
       captureNode.onaudioprocess = null;
     }
-    captureNode.disconnect();
+    try { captureNode.disconnect(); } catch {}
     captureNode = null;
   }
 
   if (silentGainNode) {
-    silentGainNode.disconnect();
+    try { silentGainNode.disconnect(); } catch {}
     silentGainNode = null;
   }
 
+  // 2. Stop the MediaStream tracks. Now that no node references the
+  //    stream, this releases the underlying CoreAudio input device.
+  if (mediaStream) {
+    for (const track of mediaStream.getTracks()) {
+      try { track.stop(); } catch {}
+    }
+    mediaStream = null;
+  }
+
+  // 3. Close the AudioContext. This is the step the OS listens to —
+  //    until the context reaches `closed`, the mic indicator stays
+  //    on. We await it so the IPC `recorder_stop` reply is not sent
+  //    back to the main process before the device is released.
   if (audioContext && audioContext.state !== "closed") {
-    audioContext.close().catch(() => {});
+    try {
+      await audioContext.close();
+    } catch {
+      // best-effort
+    }
   }
   audioContext = null;
   lastAudioContextState = null;
@@ -230,7 +254,7 @@ async function startRecording(microphoneId = null) {
     await waitForAudioProcessing(context);
     recorderAPI.sendStarted();
   } catch (error) {
-    cleanupStream();
+    await cleanupStream();
     recorderAPI.sendError(error instanceof Error ? error.message : String(error));
   }
 }
@@ -268,22 +292,35 @@ async function waitForAudioProcessing(context, timeoutMs = 2000) {
 
 async function stopRecording() {
   if (!mediaStream) {
+    // Nothing to send and nothing to release, but still clear any
+    // leftover timers / worklet blob so the next start is clean.
+    stopWaveformLoop();
+    stopChunkFlushLoop();
+    revokeWorkletBlob();
+    pcmChunks = [];
+    pendingPcmChunks = [];
     recorderAPI.sendResult(new Float32Array().buffer);
-    cleanupStream();
     return;
   }
 
+  let resultBuffer = new Float32Array().buffer;
   try {
     flushPendingChunkSamples();
     const context = await ensureAudioContext();
     const samples = concatFloat32Chunks(pcmChunks);
     const samples16k = downsampleTo16k(samples, context.sampleRate);
-
-    recorderAPI.sendResult(samples16k.buffer);
+    resultBuffer = samples16k.buffer;
   } catch (error) {
     recorderAPI.sendError(error instanceof Error ? error.message : String(error));
+    // Fall through to cleanup even on error so the mic gets released.
   } finally {
-    cleanupStream();
+    // Cleanup must run and complete before we return so the OS
+    // releases the input device. We send the result *after* cleanup
+    // finishes — the main process won't start transcription until
+    // it has the samples, and we don't want the recorder's graph
+    // torn down mid-transcription anyway.
+    await cleanupStream();
+    recorderAPI.sendResult(resultBuffer);
   }
 }
 

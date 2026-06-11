@@ -1169,6 +1169,12 @@ refreshSettingsView().catch(() => {
   setStatus("设置加载失败。已写入本地日志。", "error");
 });
 
+electronAPI.subscribeSettingsNavigation?.((panelId) => {
+  if (typeof panelId === 'string' && panelId) {
+    activatePanel(panelId);
+  }
+});
+
 unsubscribeSettingsViewData = electronAPI.subscribeSettingsViewData((view) => {
   fillSettingsView(view);
 });

@@ -23,6 +23,10 @@ export function registerIpcHandlers(
   openInputMonitoringSettings: () => void,
   openLogDirectory: () => void,
   openFeedbackEmail: () => void,
+  getMacPermissionsStatus: () => { accessibility: boolean; microphone: string },
+  ensureMacPermission: (
+    type: 'accessibility' | 'microphone'
+  ) => Promise<boolean>,
   runAsrDiagnostics: () => Promise<AsrDiagnostics>,
   startRecording: () => void,
   stopRecording: () => void,
@@ -56,6 +60,8 @@ export function registerIpcHandlers(
   ipcMain.handle('open_input_monitoring_settings', () => openInputMonitoringSettings());
   ipcMain.handle('open_log_directory', () => openLogDirectory());
   ipcMain.handle('open_feedback_email', () => openFeedbackEmail());
+  ipcMain.handle('get_mac_permissions', () => getMacPermissionsStatus());
+  ipcMain.handle('request_mac_permission', (_event, { type }) => ensureMacPermission(type));
   ipcMain.handle('run_asr_diagnostics', () => runAsrDiagnostics());
   ipcMain.handle('start_recording', () => startRecording());
   ipcMain.handle('stop_recording', () => stopRecording());

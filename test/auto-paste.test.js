@@ -3,10 +3,12 @@ const assert = require("node:assert/strict");
 
 const {
   FOREGROUND_RESTORE_DELAY_MS,
+  AutoPaste,
   createWindowsCaptureForegroundScript,
   createWindowsPasteScript,
   createWindowsReplaceRecentTextScript,
   createWindowsRestoreForegroundScript,
+  createMacReplaceRecentTextScript,
   encodePowerShellCommand,
   isSameWindowsForegroundTarget,
   runAutoPasteSequence,
@@ -113,3 +115,44 @@ test("isSameWindowsForegroundTarget accepts same handle or same process fallback
   assert.equal(isSameWindowsForegroundTarget(expected, differentProcess), false);
   assert.equal(isSameWindowsForegroundTarget(expected, null), false);
 });
+
+test("createMacReplaceRecentTextScript emits one backspace per character followed by Cmd+V", () => {
+  const script = createMacReplaceRecentTextScript(5);
+
+  assert.match(script, /tell application "System Events"/);
+  const matches = script.match(/key code 51/g) || [];
+  assert.equal(matches.length, 5);
+  assert.match(script, /keystroke "v" using command down/);
+});
+
+test("createMacReplaceRecentTextScript skips the backspace loop and just pastes for zero chars", () => {
+  const script = createMacReplaceRecentTextScript(0);
+
+  assert.doesNotMatch(script, /key code 51/);
+  assert.match(script, /keystroke "v" using command down/);
+});
+
+test("createMacReplaceRecentTextScript caps the backspace count to a safe upper bound", () => {
+  const script = createMacReplaceRecentTextScript(99999);
+
+  const matches = script.match(/key code 51/g) || [];
+  assert.equal(matches.length, 20000);
+});
+
+test("AutoPaste.replaceRecentTextInApp on darwin returns accessibility_required when not granted", async () => {
+  if (process.platform !== 'darwin') {
+    return;
+  }
+
+  const autoPaste = new AutoPaste();
+  const result = await autoPaste.replaceRecentTextInApp(
+    'com.example.editor',
+    '修正后的原文',
+    6
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'accessibility_required');
+  assert.match(result.error ?? '', /辅助功能/);
+});
+

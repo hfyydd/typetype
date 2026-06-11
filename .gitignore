@@ -10,3 +10,6 @@ typetype.log
 # Models (too large for GitHub)
 resources/models/
 resources/translation-models/
+build.exit
+build.log
+

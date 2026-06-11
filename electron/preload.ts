@@ -47,6 +47,7 @@ export interface ElectronAPI {
   setStreamingAiScenario: (scenario: RewriteScenario) => Promise<StreamingAiPanelState>;
   subscribeSnapshot: (listener: (snapshot: UiSnapshot) => void) => () => void;
   subscribeSettingsViewData: (listener: (view: SettingsViewData) => void) => () => void;
+  subscribeSettingsNavigation: (listener: (panelId: string) => void) => () => void;
   subscribeStreamingAiPanelState: (listener: (state: StreamingAiPanelState) => void) => () => void;
   platform: string;
 }
@@ -106,6 +107,17 @@ const api: ElectronAPI = {
 
     return () => {
       ipcRenderer.removeListener('settings_view_data_updated', wrapped);
+    };
+  },
+  subscribeSettingsNavigation: (listener: (panelId: string) => void) => {
+    const wrapped = (_event: Electron.IpcRendererEvent, panelId: string) => {
+      listener(panelId);
+    };
+
+    ipcRenderer.on('settings_navigate_to_panel', wrapped);
+
+    return () => {
+      ipcRenderer.removeListener('settings_navigate_to_panel', wrapped);
     };
   },
   subscribeStreamingAiPanelState: (listener: (state: StreamingAiPanelState) => void) => {

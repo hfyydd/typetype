@@ -2,15 +2,26 @@ import { exec, execSync } from 'child_process';
 import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { clipboard } from 'electron';
+import { clipboard, systemPreferences } from 'electron';
 
 export const FOREGROUND_RESTORE_DELAY_MS = 220;
+
+// Stable, machine-readable error codes so callers (the streaming AI panel
+// flow in main.ts, the non-streaming output path, etc.) can branch on the
+// failure without parsing the human-readable `error` string.
+export type PasteOperationErrorCode =
+  | 'accessibility_required'
+  | 'target_changed'
+  | 'foreground_lost'
+  | 'unsupported_platform'
+  | 'failed';
 
 export interface PasteOperationResult {
   ok: boolean;
   targetAppId?: string | null;
   foregroundAppId?: string | null;
   error?: string;
+  code?: PasteOperationErrorCode;
 }
 
 interface WindowsForegroundTarget {
@@ -172,6 +183,47 @@ export function encodePowerShellCommand(script: string): string {
   return Buffer.from(script, 'utf16le').toString('base64');
 }
 
+// macOS auto-replace: send `N` backspaces to delete the recently inserted
+// chunk, then send Cmd+V to paste the new clipboard contents. We use Apple
+// Script's `key code 51` (delete / backspace) instead of a Unicode key
+// stroke so it works for CJK and other IME-typed characters. The clipboard
+// must already contain `replacementText` before this script is invoked, and
+// the caller is responsible for ensuring macOS accessibility is granted.
+export function createMacReplaceRecentTextScript(charCount: number): string {
+  const safeCharCount = Math.max(0, Math.min(Math.floor(charCount), 20000));
+  if (safeCharCount === 0) {
+    return `
+      tell application "System Events"
+        keystroke "v" using command down
+      end tell
+    `;
+  }
+  // We avoid putting the loop count directly in the AppleScript because
+  // numbers that large can be unsafe to embed; instead we drive the
+  // repeats in JavaScript and pass a (capped) list to AppleScript.
+  const repeatTokens = Array.from({ length: safeCharCount }, () => 'key code 51').join('\n        ');
+  return `
+    tell application "System Events"
+      ${repeatTokens}
+      delay 0.05
+      keystroke "v" using command down
+    end tell
+  `;
+}
+
+export function isMacAccessibilityGranted(): boolean {
+  if (process.platform !== 'darwin') {
+    return true;
+  }
+  try {
+    return systemPreferences.isTrustedAccessibilityClient(false);
+  } catch (error) {
+    console.error('Failed to read macOS accessibility status:', error);
+    return false;
+  }
+}
+
+
 function parseWindowsForegroundTarget(value: string | null | undefined): WindowsForegroundTarget | null {
   if (!value) {
     return null;
@@ -268,13 +320,27 @@ export class AutoPaste {
     replacementText: string,
     charsToReplace: number
   ): Promise<PasteOperationResult> {
+    if (this.platform === 'darwin' && !isMacAccessibilityGranted()) {
+      return {
+        ok: false,
+        targetAppId: bundleId ?? null,
+        code: 'accessibility_required',
+        error: 'macOS 辅助功能未授权，无法执行自动回填。',
+      };
+    }
+
     await this.writeClipboard(replacementText);
+
+    if (this.platform === 'darwin') {
+      return this.replaceRecentTextMac(bundleId, replacementText, charsToReplace);
+    }
 
     if (this.platform !== 'win32') {
       return {
         ok: false,
         targetAppId: bundleId ?? null,
-        error: '一键带入目前仅支持 Windows 自动替换。',
+        code: 'unsupported_platform',
+        error: '一键带入目前仅支持 macOS 与 Windows。',
       };
     }
 
@@ -366,9 +432,101 @@ export class AutoPaste {
       ok,
       targetAppId: bundleId,
       foregroundAppId,
+      code: ok ? undefined : 'target_changed',
       error: ok ? undefined : '目标窗口未成为前台窗口，已暂停自动回填。',
     };
   }
+
+  private async restoreAndVerifyMacTarget(bundleId?: string | null): Promise<PasteOperationResult> {
+    if (!bundleId) {
+      return { ok: true, targetAppId: null };
+    }
+
+    await this.restoreForegroundApp(bundleId);
+    await new Promise((resolve) => setTimeout(resolve, FOREGROUND_RESTORE_DELAY_MS));
+    const foregroundAppId = await this.captureFrontmostApp();
+    const ok = foregroundAppId === bundleId;
+    return {
+      ok,
+      targetAppId: bundleId,
+      foregroundAppId,
+      code: ok ? undefined : 'target_changed',
+      error: ok ? undefined : '目标窗口未成为前台窗口，已暂停自动回填。',
+    };
+  }
+
+  private async replaceRecentTextMac(
+    bundleId: string | null | undefined,
+    replacementText: string,
+    charsToReplace: number
+  ): Promise<PasteOperationResult> {
+    const safeChars = Math.max(0, Math.min(Math.floor(charsToReplace), 20000));
+    if (safeChars === 0 && !replacementText) {
+      return { ok: true, targetAppId: bundleId ?? null };
+    }
+
+    try {
+      const foregroundResult = await this.restoreAndVerifyMacTarget(bundleId);
+      if (!foregroundResult.ok) {
+        return foregroundResult;
+      }
+
+      if (safeChars > 0) {
+        await this.execAppleScript(createMacReplaceRecentTextScript(safeChars));
+      } else {
+        // Nothing to delete — still paste the new clipboard contents.
+        await this.execAppleScript(
+          'tell application "System Events" to keystroke "v" using command down'
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      const foregroundAppId = await this.captureFrontmostApp();
+      const ok = !bundleId || foregroundAppId === bundleId;
+      return {
+        ok,
+        targetAppId: bundleId ?? null,
+        foregroundAppId,
+        code: ok ? undefined : 'target_changed',
+        error: ok ? undefined : '替换后目标窗口发生变化，已停止自动回填。',
+      };
+    } catch (error) {
+      console.error('macOS replace recent text error:', error);
+      return {
+        ok: false,
+        targetAppId: bundleId ?? null,
+        code: 'failed',
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  private execAppleScript(script: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      // AppleScript source can contain double quotes and Unicode, so always
+      // pipe it on stdin to avoid shell quoting hazards. The caller decides
+      // whether the script should expect any user-visible side effects.
+      const child = spawn('osascript', ['-'], { stdio: ['pipe', 'pipe', 'pipe'] });
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (chunk) => {
+        stdout += chunk.toString('utf8');
+      });
+      child.stderr.on('data', (chunk) => {
+        stderr += chunk.toString('utf8');
+      });
+      child.on('error', (err) => reject(err));
+      child.on('close', (code) => {
+        if (code === 0) {
+          resolve(stdout.trim());
+        } else {
+          const message = stderr.trim() || `osascript exited with code ${code}`;
+          reject(new Error(message));
+        }
+      });
+      child.stdin.end(script);
+    });
+  }
+
 
   private async pasteToWindowsTarget(bundleId?: string | null): Promise<PasteOperationResult> {
     try {
@@ -385,12 +543,14 @@ export class AutoPaste {
         ok,
         targetAppId: bundleId ?? null,
         foregroundAppId,
+        code: ok ? undefined : 'target_changed',
         error: ok ? undefined : '粘贴后目标窗口发生变化，已停止自动回填。',
       };
     } catch (error) {
       return {
         ok: false,
         targetAppId: bundleId ?? null,
+        code: 'failed',
         error: error instanceof Error ? error.message : String(error),
       };
     }

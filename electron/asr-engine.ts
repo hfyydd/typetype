@@ -2,7 +2,21 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 
-import { app } from 'electron';
+// Lazy access to electron.app. This module is loaded by the ASR worker
+// child process (asr-engine-worker.ts), which runs under
+// ELECTRON_RUN_AS_NODE=1 in plain Node mode and cannot `require('electron')`
+// the way the main process can. A top-level `import { app } from 'electron'`
+// would throw at module load time and the worker would exit with code 1
+// before the uncaughtException handler gets a chance to install. The
+// lazy require below keeps the module loadable from both contexts.
+function getApp(): { getPath(name: 'userData' | 'logs'): string } | null {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    return require('electron').app;
+  } catch {
+    return null;
+  }
+}
 
 import { getDefaultNumThreads, getProviderCandidates, ProviderName } from './asr-runtime';
 import { stripUnknownTokens } from './transcript-cleanup';
@@ -200,8 +214,8 @@ function getAsciiModelLinkRoot(): string | null {
     'C:\\ProgramData\\typetype\\model-links',
     (() => {
       try {
-        const userData = app.getPath('userData');
-        return isAsciiPath(userData) ? path.join(userData, 'model-links') : null;
+        const userData = getApp()?.getPath('userData');
+        return userData && isAsciiPath(userData) ? path.join(userData, 'model-links') : null;
       } catch {
         return null;
       }
@@ -299,20 +313,25 @@ function isModelDirectoryCompatible(
 }
 
 function loadSherpaOnnxNode(): any {
-  if (app?.isPackaged) {
+  // Resolve the unpacked sherpa-onnx-node entry without depending on
+  // Electron's `app` object. The main process has `process.resourcesPath`
+  // set by Electron; the forked ASR worker runs in plain-Node mode
+  // (ELECTRON_RUN_AS_NODE=1) and only has the resources path injected
+  // via the TYPETYPE_RESOURCES_PATH env var by AsrEngineProxy. Either
+  // path is good enough to locate the asar.unpacked copy.
+  const resourcesPath = process.env.TYPETYPE_RESOURCES_PATH || process.resourcesPath;
+  if (resourcesPath) {
     const unpackedEntry = path.join(
-      process.resourcesPath,
+      resourcesPath,
       'app.asar.unpacked',
       'node_modules',
       'sherpa-onnx-node',
       'sherpa-onnx.js'
     );
-
     if (fs.existsSync(unpackedEntry)) {
       return require(unpackedEntry);
     }
   }
-
   return require('sherpa-onnx-node');
 }
 

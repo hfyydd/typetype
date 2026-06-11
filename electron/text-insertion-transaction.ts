@@ -1,6 +1,6 @@
 import { clipboard } from 'electron';
 
-import { PasteOperationResult } from './auto-paste';
+import { PasteOperationResult, PasteOperationErrorCode } from './auto-paste';
 
 export interface TextInsertionTransactionAutoPaste {
   writeClipboard(text: string): Promise<void>;
@@ -32,6 +32,7 @@ export interface TextInsertionReplaceResult {
   insertedText: string;
   charsReplaced: number;
   error?: string;
+  code?: PasteOperationErrorCode;
 }
 
 export class TextInsertionTransaction {
@@ -148,6 +149,7 @@ export class TextInsertionTransaction {
           status: 'failed',
           insertedText: this.insertedText,
           charsReplaced: 0,
+          code: replaceResult.code,
           error: replaceResult.error ?? '自动替换失败。',
         };
       }

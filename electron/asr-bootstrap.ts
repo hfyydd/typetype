@@ -2,11 +2,9 @@ import { app } from 'electron';
 
 import * as fs from 'fs';
 import * as path from 'path';
-import * as https from 'https';
-import * as tar from 'tar-stream';
-import * as bzip2 from 'bzip2';
 
 import { AsrEngine } from './asr-engine';
+import { AsrEngineProxy } from './asr-engine-proxy';
 import { Settings } from './types';
 import { getModelSearchPaths } from './model-search-paths';
 
@@ -21,243 +19,21 @@ const SENSE_VOICE_MODEL_DIR = 'sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025
 const STREAMING_MIXED_MODEL_DIR = 'sherpa-onnx-streaming-paraformer-trilingual-zh-cantonese-en';
 const STREAMING_XLARGE_MODEL_DIR = 'sherpa-onnx-streaming-zipformer-ctc-zh-xlarge-int8-2025-06-30';
 const PRO_HIGH_ACCURACY_MODEL_DIR = 'typetype-professional-high-accuracy-voice-package';
-const PRO_HIGH_ACCURACY_DOWNLOAD_URL = process.env.TYPETYPE_PRO_VOICE_PACKAGE_URL || '';
 
-const MODEL_DOWNLOAD_URLS = {
-  'sherpa-onnx-sense-voice': {
-    url: `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/${SENSE_VOICE_MODEL_DIR}.tar.bz2`,
-    archiveName: `${SENSE_VOICE_MODEL_DIR}.tar.bz2`,
-    modelDirName: SENSE_VOICE_MODEL_DIR,
-  },
-  'sherpa-onnx-streaming-zipformer-ctc-zh-xlarge': {
-    url: `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/${STREAMING_XLARGE_MODEL_DIR}.tar.bz2`,
-    archiveName: `${STREAMING_XLARGE_MODEL_DIR}.tar.bz2`,
-    modelDirName: STREAMING_XLARGE_MODEL_DIR,
-  },
-  'typetype-professional-high-accuracy': {
-    url: PRO_HIGH_ACCURACY_DOWNLOAD_URL,
-    archiveName: `${PRO_HIGH_ACCURACY_MODEL_DIR}.tar.bz2`,
-    modelDirName: PRO_HIGH_ACCURACY_MODEL_DIR,
-  },
-};
-
-async function downloadFile(
-  url: string,
-  destPath: string,
-  onProgress?: (received: number, total: number) => void,
-  redirectCount = 0
-): Promise<void> {
-  if (redirectCount > 5) {
-    throw new Error('Download failed: too many redirects');
-  }
-
-  const destDir = path.dirname(destPath);
-  fs.mkdirSync(destDir, { recursive: true });
-
-  const tempPath = path.join(
-    destDir,
-    `${path.basename(destPath)}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.download`
+// All ASR / translation / punctuation models are shipped inside the
+// application bundle under Contents/Resources/models (and the two
+// companion directories). When `tryCreateEngine` cannot locate the
+// requested model in any of the packaged search paths, the bootstrap
+// now fails fast with a clear error log instead of silently downloading
+// an archive from the internet. This keeps the user experience offline
+// and predictable — a missing model is a packaging defect, not a
+// recoverable runtime condition.
+function logMissingPackagedModel(modelName: string, searchPaths: string[]): null {
+  console.error(
+    `[asr-bootstrap] Packaged model "${modelName}" was not found in any of the bundled search paths. ` +
+    `This is a packaging defect, not a network condition. Searched:\n  - ${searchPaths.join('\n  - ')}`
   );
-
-  return new Promise((resolve, reject) => {
-    let file: fs.WriteStream | null = null;
-    let settled = false;
-    let receivedBytes = 0;
-    let totalBytes = 0;
-
-    const cleanupTempFile = () => {
-      try {
-        fs.rmSync(tempPath, { force: true });
-      } catch {
-        // Best-effort cleanup only; download failure should not crash the main process.
-      }
-    };
-
-    const settleWithError = (error: Error) => {
-      if (settled) return;
-      settled = true;
-      if (file && !file.closed) {
-        file.destroy();
-      }
-      cleanupTempFile();
-      reject(error);
-    };
-
-    const request = https.get(url, (response) => {
-      const statusCode = response.statusCode ?? 0;
-      const isRedirect = [301, 302, 303, 307, 308].includes(statusCode);
-
-      if (isRedirect) {
-        response.resume();
-        const redirectUrl = response.headers.location;
-        if (!redirectUrl) {
-          settleWithError(new Error(`Download redirect missing location header: ${statusCode}`));
-          return;
-        }
-
-        settled = true;
-        const nextUrl = new URL(redirectUrl, url).toString();
-        downloadFile(nextUrl, destPath, onProgress, redirectCount + 1).then(resolve).catch(reject);
-        return;
-      }
-
-      if (statusCode !== 200) {
-        response.resume();
-        settleWithError(new Error(`Download failed with status ${statusCode}`));
-        return;
-      }
-
-      totalBytes = parseInt(response.headers['content-length'] || '0', 10);
-      file = fs.createWriteStream(tempPath, { flags: 'wx' });
-
-      response.on('data', (chunk) => {
-        receivedBytes += chunk.length;
-        if (onProgress && totalBytes > 0) {
-          onProgress(receivedBytes, totalBytes);
-        }
-      });
-
-      response.on('error', (error) => {
-        settleWithError(error instanceof Error ? error : new Error(String(error)));
-      });
-
-      file.on('error', (error) => {
-        settleWithError(error instanceof Error ? error : new Error(String(error)));
-      });
-
-      file.on('finish', () => {
-        file?.close((closeError) => {
-          if (closeError) {
-            settleWithError(closeError);
-            return;
-          }
-
-          try {
-            fs.rmSync(destPath, { force: true });
-            fs.renameSync(tempPath, destPath);
-            settled = true;
-            resolve();
-          } catch (error) {
-            settleWithError(error instanceof Error ? error : new Error(String(error)));
-          }
-        });
-      });
-
-      response.pipe(file);
-    });
-
-    request.on('error', (error) => {
-      settleWithError(error instanceof Error ? error : new Error(String(error)));
-    });
-
-    request.setTimeout(120000, () => {
-      request.destroy(new Error('Download timeout'));
-    });
-  });
-}
-
-function modelDirectoryHasRequiredFiles(modelDir: string): boolean {
-  return (
-    fs.existsSync(path.join(modelDir, 'tokens.txt')) &&
-    (
-      fs.existsSync(path.join(modelDir, 'model.int8.onnx')) ||
-      fs.existsSync(path.join(modelDir, 'model.onnx'))
-    )
-  );
-}
-
-async function extractModelArchive(archivePath: string, modelsDir: string, modelDir: string): Promise<void> {
-  fs.mkdirSync(modelsDir, { recursive: true });
-  fs.rmSync(modelDir, { recursive: true, force: true });
-
-  try {
-    const fileContent = fs.readFileSync(archivePath);
-    const decompressed = bzip2.simple(bzip2.array(fileContent));
-    const extractor = tar.extract();
-
-    await new Promise<void>((resolve, reject) => {
-      const entries: { name: string; data: Buffer[] }[] = [];
-
-      extractor.on('entry', (headers, stream, next) => {
-        const chunks: Buffer[] = [];
-        stream.on('data', (chunk: Buffer) => chunks.push(chunk));
-        stream.on('end', () => {
-          entries.push({ name: headers.name, data: chunks });
-          next();
-        });
-        stream.resume();
-      });
-
-      extractor.on('finish', () => {
-        try {
-          for (const entry of entries) {
-            const entryPath = path.join(modelsDir, entry.name);
-            if (entry.name.endsWith('/')) {
-              fs.mkdirSync(entryPath, { recursive: true });
-            } else {
-              fs.mkdirSync(path.dirname(entryPath), { recursive: true });
-              fs.writeFileSync(entryPath, Buffer.concat(entry.data));
-            }
-          }
-          resolve();
-        } catch (err) {
-          reject(err);
-        }
-      });
-
-      extractor.on('error', reject);
-      extractor.end(Buffer.from(decompressed));
-    });
-
-    if (!modelDirectoryHasRequiredFiles(modelDir)) {
-      throw new Error(`Extracted model is missing model.int8.onnx/model.onnx or tokens.txt: ${modelDir}`);
-    }
-  } catch (error) {
-    fs.rmSync(modelDir, { recursive: true, force: true });
-    throw error;
-  } finally {
-    fs.rmSync(archivePath, { force: true });
-  }
-}
-
-async function downloadModel(modelName: string, dataDir: string): Promise<string | null> {
-  const modelInfo = MODEL_DOWNLOAD_URLS[modelName as keyof typeof MODEL_DOWNLOAD_URLS];
-  if (!modelInfo) {
-    console.error(`No download URL for model: ${modelName}`);
-    return null;
-  }
-  if (!modelInfo.url) {
-    console.warn(`Download URL is not configured for model: ${modelName}`);
-    return null;
-  }
-
-  const modelsDir = path.join(dataDir, 'models');
-  const modelDir = path.join(modelsDir, modelInfo.modelDirName);
-  const archivePath = path.join(modelsDir, modelInfo.archiveName);
-
-  if (modelDirectoryHasRequiredFiles(modelDir)) {
-    console.log(`Model ${modelName} already exists at ${modelDir}`);
-    return modelDir;
-  }
-
-  console.log(`Downloading model ${modelName} to ${modelsDir}...`);
-
-  try {
-    await downloadFile(modelInfo.url, archivePath, (received, total) => {
-      const mb = (received / (1024 * 1024)).toFixed(1);
-      const totalMb = (total / (1024 * 1024)).toFixed(1);
-      process.stdout.write(`\r  Downloading: ${mb} MB / ${totalMb} MB`);
-    });
-    console.log('\n  Download complete, extracting model');
-
-    await extractModelArchive(archivePath, modelsDir, modelDir);
-    console.log('  Extraction complete');
-    return modelDir;
-  } catch (error) {
-    console.error(`Failed to download model ${modelName}:`, error);
-    try { fs.rmSync(archivePath, { force: true }); } catch {}
-    return null;
-  }
+  return null;
 }
 
 export async function initializeAsrEngine({
@@ -265,7 +41,7 @@ export async function initializeAsrEngine({
   settings,
   processResourcesPath = process.resourcesPath,
   appPath = app.getAppPath(),
-}: InitializeAsrEngineOptions): Promise<AsrEngine | null> {
+}: InitializeAsrEngineOptions): Promise<AsrEngineProxy | null> {
   if (settings.recognition_mode === 'streaming_output') {
     if (settings.streaming_model === 'multilingual_segmented') {
       const segmentedStreamingSettings: Settings = {
@@ -279,49 +55,35 @@ export async function initializeAsrEngine({
         : null;
       if (configuredEngine) return configuredEngine;
 
-      const engine = await tryCreateEngine(
-        getMixedSegmentedStreamingModelSearchPaths({
-          dataDir,
-          processResourcesPath,
-          appPath,
-        }),
-        segmentedStreamingSettings
-      );
-      if (engine) return engine;
-
-      const downloadedPath = await downloadModel('sherpa-onnx-sense-voice', dataDir);
-      if (downloadedPath) {
-        const downloadedEngine = await tryCreateEngine([downloadedPath], segmentedStreamingSettings);
-        if (downloadedEngine) {
-          return downloadedEngine;
-        }
-      }
-
-      console.warn('Mixed segmented streaming model is unavailable; falling back to Chinese online streaming');
-    }
-
-    const engine = await tryCreateEngine(
-      getStreamingModelSearchPaths({
+      const segmentedSearchPaths = getMixedSegmentedStreamingModelSearchPaths({
         dataDir,
         processResourcesPath,
         appPath,
-        settings,
-      }),
-      settings
-    );
+      });
+      const engine = await tryCreateEngine(segmentedSearchPaths, segmentedStreamingSettings);
+      if (engine) return engine;
+
+      console.warn(
+        '[asr-bootstrap] Mixed segmented streaming model is unavailable; falling back to Chinese online streaming. ' +
+        `Looked in: ${segmentedSearchPaths.join(', ')}`
+      );
+    }
+
+    const streamingSearchPaths = getStreamingModelSearchPaths({
+      dataDir,
+      processResourcesPath,
+      appPath,
+      settings,
+    });
+    const engine = await tryCreateEngine(streamingSearchPaths, settings);
     if (engine) return engine;
 
-    const downloadCandidates = ['sherpa-onnx-streaming-zipformer-ctc-zh-xlarge'];
-    for (const candidate of downloadCandidates) {
-      const downloadedPath = await downloadModel(candidate, dataDir);
-      if (downloadedPath) {
-        const downloadedEngine = await tryCreateEngine([downloadedPath], settings);
-        if (downloadedEngine) {
-          return downloadedEngine;
-        }
-      }
-    }
-    return null;
+    return logMissingPackagedModel(
+      settings.streaming_model === 'zh_high_accuracy_realtime'
+        ? STREAMING_XLARGE_MODEL_DIR
+        : STREAMING_MIXED_MODEL_DIR,
+      streamingSearchPaths
+    );
   }
 
   if (settings.model_path) {
@@ -336,23 +98,20 @@ export async function initializeAsrEngine({
       ...settings,
       compute_backend: 'gpu',
     };
-    const professionalEngine = await tryCreateEngine(
-      getProfessionalModelSearchPaths({ dataDir, processResourcesPath, appPath }),
-      professionalSettings
-    );
+    const professionalSearchPaths = getProfessionalModelSearchPaths({
+      dataDir,
+      processResourcesPath,
+      appPath,
+    });
+    const professionalEngine = await tryCreateEngine(professionalSearchPaths, professionalSettings);
     if (professionalEngine) {
       return professionalEngine;
     }
 
-    const downloadedPath = await downloadModel('typetype-professional-high-accuracy', dataDir);
-    if (downloadedPath) {
-      const downloadedEngine = await tryCreateEngine([downloadedPath], professionalSettings);
-      if (downloadedEngine) {
-        return downloadedEngine;
-      }
-    }
-
-    console.warn('Professional voice package is unavailable; falling back to the fast offline package');
+    console.warn(
+      '[asr-bootstrap] Professional voice package is unavailable; falling back to the fast offline package. ' +
+      `Looked in: ${professionalSearchPaths.join(', ')}`
+    );
   }
 
   const searchPaths = getModelSearchPaths({
@@ -364,12 +123,10 @@ export async function initializeAsrEngine({
   const engine = await tryCreateEngine(searchPaths, settings);
   if (engine) return engine;
 
-  const downloadedPath = await downloadModel(settings.pinned_model_version || 'sherpa-onnx-sense-voice', dataDir);
-  if (downloadedPath) {
-    return tryCreateEngine([downloadedPath], settings);
-  }
-
-  return null;
+  return logMissingPackagedModel(
+    settings.pinned_model_version || SENSE_VOICE_MODEL_DIR,
+    searchPaths
+  );
 }
 
 function getProfessionalModelSearchPaths({
@@ -394,21 +151,27 @@ function getProfessionalModelSearchPaths({
   ]);
 }
 
-async function tryCreateEngine(searchPaths: string[], settings: Settings): Promise<AsrEngine | null> {
+async function tryCreateEngine(searchPaths: string[], settings: Settings): Promise<AsrEngineProxy | null> {
   const modelInfo = AsrEngine.findModelPath(searchPaths, settings.recognition_mode);
   if (!modelInfo) {
     return null;
   }
 
-  const engine = new AsrEngine(modelInfo, {
-    computeBackend: settings.compute_backend,
+  // The proxy spawns a child process that runs the sherpa-onnx recognizer
+  // constructor. By keeping the heavy C++ initialization off the main
+  // process event loop, the settings panel stays responsive when the
+  // user switches recognition mode / streaming model / voice package.
+  const proxy = new AsrEngineProxy({
+    modelFiles: modelInfo,
     recognitionMode: settings.recognition_mode,
+    computeBackend: settings.compute_backend,
   });
   try {
-    await engine.initialize();
-    return engine;
+    await proxy.initialize();
+    return proxy;
   } catch (error) {
     console.error('Failed to initialize ASR engine:', error);
+    await proxy.destroy().catch(() => undefined);
     return null;
   }
 }
