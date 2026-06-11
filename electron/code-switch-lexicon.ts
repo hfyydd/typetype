@@ -61,6 +61,14 @@ export class CodeSwitchLexicon {
     return this.entries.length;
   }
 
+  getHotwordTerms(limit = 5000): string[] {
+    return this.entries
+      .filter((entry) => shouldPreferAsrHotword(entry.term, entry.risk))
+      .sort((a, b) => scoreAsrHotword(b) - scoreAsrHotword(a) || a.term.localeCompare(b.term, 'zh-CN'))
+      .slice(0, limit)
+      .map((entry) => entry.term);
+  }
+
   applyToText(text: string, options: CodeSwitchApplyOptions = {}): CodeSwitchApplyResult {
     if (!text.trim() || this.aliases.length === 0) {
       return {
@@ -332,4 +340,24 @@ function normalizeMixedSpacing(text: string): string {
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function shouldPreferAsrHotword(term: string, risk: CodeSwitchRisk = 'medium'): boolean {
+  if (risk === 'high' && term.length <= 3) {
+    return false;
+  }
+  return /[A-Za-z0-9]|狱|侦|监|押|犯|刑|法|警|检|诉|审|政法|公安|法院|检察|看守|拘留|矫正/u.test(term);
+}
+
+function scoreAsrHotword(entry: CodeSwitchLexiconEntry): number {
+  let score = 0;
+  if (/[A-Za-z]/.test(entry.term)) score += 8;
+  if (/\d/.test(entry.term)) score += 4;
+  if (/狱|侦|监|押|犯|刑|法|警|检|诉|审|政法|公安|法院|检察|看守|拘留|矫正/u.test(entry.term)) score += 9;
+  if ((entry.tags ?? []).some((tag) => ['ai', 'china-ai', 'law-enforcement', 'justice', 'prison'].includes(tag))) {
+    score += 5;
+  }
+  if (entry.risk === 'low') score += 2;
+  if (entry.term.length > 32) score -= 3;
+  return score;
 }

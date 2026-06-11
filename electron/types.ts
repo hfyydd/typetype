@@ -301,6 +301,22 @@ export interface AsrDiagnostics {
   backend: string;
   runtime: string;
   message: string;
+  itn_enabled: boolean;
+  hotwords_supported: boolean;
+  hotwords_enabled: boolean;
+  hotwords_count: number;
+  hotwords_path: string;
+  code_switch_lexicon_count: number;
+  dictionary_count: number;
+  normalization_mode: string;
+}
+
+export interface AsrHotwordStatus {
+  supported: boolean;
+  enabled: boolean;
+  path: string | null;
+  count: number;
+  reason: string;
 }
 
 export type RuntimeStatus = 'idle' | 'recording' | 'transcribing' | 'polishing' | 'translating' | 'stopped' | 'done';

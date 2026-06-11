@@ -1,0 +1,102 @@
+{
+  "version": 1,
+  "description": "Typetype ASR 后处理专项语料：热词、保守 ITN、混输保护和反误触。",
+  "cases": [
+    {
+      "category": "phone",
+      "mode": "non_streaming",
+      "input": "我的手机号是一三八一二三四五六七八",
+      "expected": "我的手机号是13812345678"
+    },
+    {
+      "category": "phone",
+      "mode": "non_streaming",
+      "input": "客服电话是四零零八零零一二三四",
+      "expected": "客服电话是4008001234"
+    },
+    {
+      "category": "extension",
+      "mode": "non_streaming",
+      "input": "分机号八零六",
+      "expected": "分机号806"
+    },
+    {
+      "category": "weekday",
+      "mode": "streaming_final",
+      "input": "周一上午十点开会",
+      "expected": "周一上午10点开会"
+    },
+    {
+      "category": "weekday",
+      "mode": "streaming_final",
+      "input": "周二下午两点 review",
+      "expected": "周二下午2点 review"
+    },
+    {
+      "category": "date_time",
+      "mode": "non_streaming",
+      "input": "六月十一号下午三点半开 meeting",
+      "expected": "6月11号下午3点半开 meeting"
+    },
+    {
+      "category": "date",
+      "mode": "non_streaming",
+      "input": "二零二六年六月十一日",
+      "expected": "2026年6月11日"
+    },
+    {
+      "category": "date",
+      "mode": "streaming_final",
+      "input": "二零二五年一月一号。",
+      "expected": "2025年1月1号。"
+    },
+    {
+      "category": "date",
+      "mode": "streaming_final",
+      "input": "二零一二年，五月六日。",
+      "expected": "2012年，5月6日。"
+    },
+    {
+      "category": "percent",
+      "mode": "non_streaming",
+      "input": "今天 ROI 是百分之三十",
+      "expected": "今天 ROI 是30%"
+    },
+    {
+      "category": "money",
+      "mode": "non_streaming",
+      "input": "预算是一万二千元",
+      "expected": "预算是12000元"
+    },
+    {
+      "category": "version",
+      "mode": "non_streaming",
+      "input": "这个版本是三点二点一",
+      "expected": "这个版本是3.2.1"
+    },
+    {
+      "category": "order",
+      "mode": "non_streaming",
+      "input": "订单号是一二三四五六",
+      "expected": "订单号是123456"
+    },
+    {
+      "category": "false_positive",
+      "mode": "non_streaming",
+      "input": "一心一意做好服务",
+      "expected": "一心一意做好服务"
+    },
+    {
+      "category": "false_positive",
+      "mode": "non_streaming",
+      "input": "三三两两的人过来",
+      "expected": "三三两两的人过来"
+    },
+    {
+      "category": "justice",
+      "mode": "non_streaming",
+      "input": "狱政管理和狱侦科今天做风险防控 review",
+      "expected": "狱政管理和狱侦科今天做风险防控 review"
+    }
+  ]
+}

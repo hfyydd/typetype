@@ -845,6 +845,11 @@ async function exportDictionary() {
 }
 
 function formatAsrDiagnostics(report) {
+  const hotwordState = report.hotwords_enabled
+    ? "已启用"
+    : report.hotwords_supported
+      ? "支持但未启用"
+      : "当前模式不支持底层热词";
   return [
     `结果: ${report.ok ? "通过" : "失败"}`,
     `模式: ${report.mode}`,
@@ -852,6 +857,12 @@ function formatAsrDiagnostics(report) {
     `模型目录: ${report.model_path}`,
     `后端: ${report.backend}`,
     `运行时: ${report.runtime}`,
+    `ITN: ${report.itn_enabled ? `已启用（${report.normalization_mode || "保守转换"}）` : "未启用"}`,
+    `ASR 热词: ${hotwordState}`,
+    `ASR 热词条数: ${report.hotwords_count ?? 0}`,
+    `ASR 热词文件: ${report.hotwords_path || "无"}`,
+    `混输词库条数: ${report.code_switch_lexicon_count ?? 0}`,
+    `个人词典条数: ${report.dictionary_count ?? 0}`,
     `说明: ${report.message}`,
   ].join("\n");
 }

@@ -1,6 +1,6 @@
 {
   "name": "typetype",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "typetype local voice input tool with offline ASR",
   "main": "dist-electron/main.js",
   "author": "typetype",

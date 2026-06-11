@@ -6,8 +6,9 @@ import * as https from 'https';
 import * as tar from 'tar-stream';
 import * as bzip2 from 'bzip2';
 
-import { AsrEngine } from './asr-engine';
-import { Settings } from './types';
+import { AsrEngine, ModelFiles } from './asr-engine';
+import { AsrHotwordManager, AsrHotwordContext } from './asr-hotword-manager';
+import { AsrHotwordStatus, Settings } from './types';
 import { getModelSearchPaths } from './model-search-paths';
 
 export interface InitializeAsrEngineOptions {
@@ -15,7 +16,17 @@ export interface InitializeAsrEngineOptions {
   settings: Settings;
   processResourcesPath?: string;
   appPath?: string;
+  hotwordManager?: AsrHotwordManager;
+  hotwordContext?: Omit<AsrHotwordContext, 'modelFiles' | 'settings'>;
 }
+
+const DEFAULT_HOTWORD_STATUS: AsrHotwordStatus = {
+  supported: false,
+  enabled: false,
+  path: null,
+  count: 0,
+  reason: '未准备热词',
+};
 
 const SENSE_VOICE_MODEL_DIR = 'sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2025-09-09';
 const STREAMING_MIXED_MODEL_DIR = 'sherpa-onnx-streaming-paraformer-trilingual-zh-cantonese-en';
@@ -265,6 +276,8 @@ export async function initializeAsrEngine({
   settings,
   processResourcesPath = process.resourcesPath,
   appPath = app.getAppPath(),
+  hotwordManager,
+  hotwordContext,
 }: InitializeAsrEngineOptions): Promise<AsrEngine | null> {
   if (settings.recognition_mode === 'streaming_output') {
     if (settings.streaming_model === 'multilingual_segmented') {
@@ -275,7 +288,7 @@ export async function initializeAsrEngine({
       };
 
       const configuredEngine = settings.model_path
-        ? await tryCreateEngine([settings.model_path], segmentedStreamingSettings)
+        ? await tryCreateEngine([settings.model_path], segmentedStreamingSettings, hotwordManager, hotwordContext)
         : null;
       if (configuredEngine) return configuredEngine;
 
@@ -285,13 +298,15 @@ export async function initializeAsrEngine({
           processResourcesPath,
           appPath,
         }),
-        segmentedStreamingSettings
+        segmentedStreamingSettings,
+        hotwordManager,
+        hotwordContext
       );
       if (engine) return engine;
 
       const downloadedPath = await downloadModel('sherpa-onnx-sense-voice', dataDir);
       if (downloadedPath) {
-        const downloadedEngine = await tryCreateEngine([downloadedPath], segmentedStreamingSettings);
+        const downloadedEngine = await tryCreateEngine([downloadedPath], segmentedStreamingSettings, hotwordManager, hotwordContext);
         if (downloadedEngine) {
           return downloadedEngine;
         }
@@ -307,7 +322,9 @@ export async function initializeAsrEngine({
         appPath,
         settings,
       }),
-      settings
+      settings,
+      hotwordManager,
+      hotwordContext
     );
     if (engine) return engine;
 
@@ -315,7 +332,7 @@ export async function initializeAsrEngine({
     for (const candidate of downloadCandidates) {
       const downloadedPath = await downloadModel(candidate, dataDir);
       if (downloadedPath) {
-        const downloadedEngine = await tryCreateEngine([downloadedPath], settings);
+        const downloadedEngine = await tryCreateEngine([downloadedPath], settings, hotwordManager, hotwordContext);
         if (downloadedEngine) {
           return downloadedEngine;
         }
@@ -325,7 +342,7 @@ export async function initializeAsrEngine({
   }
 
   if (settings.model_path) {
-    const configuredModel = await tryCreateEngine([settings.model_path], settings);
+    const configuredModel = await tryCreateEngine([settings.model_path], settings, hotwordManager, hotwordContext);
     if (configuredModel) {
       return configuredModel;
     }
@@ -338,7 +355,9 @@ export async function initializeAsrEngine({
     };
     const professionalEngine = await tryCreateEngine(
       getProfessionalModelSearchPaths({ dataDir, processResourcesPath, appPath }),
-      professionalSettings
+      professionalSettings,
+      hotwordManager,
+      hotwordContext
     );
     if (professionalEngine) {
       return professionalEngine;
@@ -346,7 +365,7 @@ export async function initializeAsrEngine({
 
     const downloadedPath = await downloadModel('typetype-professional-high-accuracy', dataDir);
     if (downloadedPath) {
-      const downloadedEngine = await tryCreateEngine([downloadedPath], professionalSettings);
+      const downloadedEngine = await tryCreateEngine([downloadedPath], professionalSettings, hotwordManager, hotwordContext);
       if (downloadedEngine) {
         return downloadedEngine;
       }
@@ -361,12 +380,12 @@ export async function initializeAsrEngine({
     appPath,
   });
 
-  const engine = await tryCreateEngine(searchPaths, settings);
+  const engine = await tryCreateEngine(searchPaths, settings, hotwordManager, hotwordContext);
   if (engine) return engine;
 
   const downloadedPath = await downloadModel(settings.pinned_model_version || 'sherpa-onnx-sense-voice', dataDir);
   if (downloadedPath) {
-    return tryCreateEngine([downloadedPath], settings);
+    return tryCreateEngine([downloadedPath], settings, hotwordManager, hotwordContext);
   }
 
   return null;
@@ -394,15 +413,26 @@ function getProfessionalModelSearchPaths({
   ]);
 }
 
-async function tryCreateEngine(searchPaths: string[], settings: Settings): Promise<AsrEngine | null> {
+async function tryCreateEngine(
+  searchPaths: string[],
+  settings: Settings,
+  hotwordManager?: AsrHotwordManager,
+  hotwordContext?: Omit<AsrHotwordContext, 'modelFiles' | 'settings'>
+): Promise<AsrEngine | null> {
   const modelInfo = AsrEngine.findModelPath(searchPaths, settings.recognition_mode);
   if (!modelInfo) {
     return null;
   }
 
-  const engine = new AsrEngine(modelInfo, {
+  const hotwordStatus = prepareHotwordStatus(modelInfo, settings, hotwordManager, hotwordContext);
+  const modelInfoWithHotwords = hotwordStatus.enabled && hotwordStatus.path
+    ? { ...modelInfo, hotwordsPath: hotwordStatus.path }
+    : modelInfo;
+
+  const engine = new AsrEngine(modelInfoWithHotwords, {
     computeBackend: settings.compute_backend,
     recognitionMode: settings.recognition_mode,
+    hotwordStatus,
   });
   try {
     await engine.initialize();
@@ -437,6 +467,34 @@ function getStreamingModelSearchPaths({
     ]),
     ...getModelSearchPaths({ dataDir, processResourcesPath, appPath }),
   ];
+}
+
+function prepareHotwordStatus(
+  modelFiles: ModelFiles,
+  settings: Settings,
+  hotwordManager?: AsrHotwordManager,
+  hotwordContext?: Omit<AsrHotwordContext, 'modelFiles' | 'settings'>
+): AsrHotwordStatus {
+  if (!hotwordManager) {
+    return DEFAULT_HOTWORD_STATUS;
+  }
+
+  try {
+    return hotwordManager.prepareHotwords({
+      modelFiles,
+      settings,
+      ...(hotwordContext ?? {}),
+    });
+  } catch (error) {
+    console.warn('Failed to prepare ASR hotwords:', error);
+    return {
+      supported: false,
+      enabled: false,
+      path: null,
+      count: 0,
+      reason: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 function getMixedSegmentedStreamingModelSearchPaths({

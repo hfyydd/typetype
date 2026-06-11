@@ -68,6 +68,8 @@ import { TextInsertionTransaction } from './text-insertion-transaction';
 import { CodeSwitchLexicon } from './code-switch-lexicon';
 import { AiRewriteGate } from './ai-rewrite-gate';
 import { SemanticPunctuationEngine } from './semantic-punctuation-engine';
+import { TextNormalizationEngine } from './text-normalization-engine';
+import { AsrHotwordManager } from './asr-hotword-manager';
 
 const FEEDBACK_EMAIL = 'feedback@typetype.app';
 const WINDOWS_LOGIN_ITEM_NAME = 'typetype';
@@ -177,6 +179,8 @@ class TypenewApp {
   private aiRewriteGate: AiRewriteGate;
   private localPunctuationEngine: LocalPunctuationEngine;
   private semanticPunctuationEngine: SemanticPunctuationEngine;
+  private textNormalizationEngine: TextNormalizationEngine;
+  private asrHotwordManager: AsrHotwordManager;
   private shortcutWatchdogTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
@@ -196,6 +200,10 @@ class TypenewApp {
       resourcesPath: this.getResourcesPath(),
     });
     this.aiRewriteGate = new AiRewriteGate();
+    this.textNormalizationEngine = new TextNormalizationEngine();
+    this.asrHotwordManager = new AsrHotwordManager({
+      dataDir: this.getDataDir(),
+    });
     const dictionaryStats = this.dictionaryStore.getViewData().stats;
     this.preloadStatus.dictionary = {
       status: 'ready',
@@ -243,6 +251,26 @@ class TypenewApp {
 
   private getDictionaryViewData(): DictionaryViewData {
     return this.dictionaryStore.getViewData();
+  }
+
+  private buildAsrHotwordContext(): {
+    codeSwitchTerms: string[];
+    dictionaryTerms: string[];
+    systemTerms: string[];
+  } {
+    const dictionaryTerms = this.dictionaryStore
+      .getEntries()
+      .filter((entry) => entry.enabled)
+      .flatMap((entry) => [entry.term, entry.replacement, ...entry.aliases]);
+    const systemTerms = this.dictionaryStore
+      .getSystemLexicon()
+      .map((entry) => entry.term);
+
+    return {
+      codeSwitchTerms: this.codeSwitchLexicon.getHotwordTerms(5000),
+      dictionaryTerms,
+      systemTerms,
+    };
   }
 
   private saveDictionaryEntry(entry: Partial<DictionaryEntry>): DictionaryViewData {
@@ -632,7 +660,10 @@ class TypenewApp {
   private setStreamingAiScenario(scenario: RewriteScenario): StreamingAiPanelState {
     this.streamingRewriteScenario = scenario || 'general';
     const settings = this.getStreamingRewriteSettings(this.settingsStore.getSettings());
-    const rawText = this.streamingAiState.raw_text || this.streamingLatestText || this.streamingOutputText;
+    const rawText = this.normalizeTranscriptText(
+      this.streamingAiState.raw_text || this.streamingLatestText || this.streamingOutputText,
+      settings
+    );
     const localRewrite = rawText ? this.buildLocalChineseRewrite(rawText, settings, false) : null;
     this.patchStreamingAiPanelState({
       rewrite_scenario: this.streamingRewriteScenario,
@@ -657,21 +688,33 @@ class TypenewApp {
   }
 
   private copyStreamingAiRaw(): StreamingAiPanelState {
-    const text = sanitizeStreamingAiText(this.streamingAiState.refined_raw_text || this.streamingAiState.raw_text || '');
+    const settings = this.getStreamingRewriteSettings(this.settingsStore.getSettings());
+    const text = this.normalizeTranscriptText(
+      sanitizeStreamingAiText(this.streamingAiState.refined_raw_text || this.streamingAiState.raw_text || ''),
+      settings
+    );
     clipboard.writeText(text);
     this.patchStreamingAiPanelState({ status_text: text ? 'AI 修正原文已复制到剪贴板。' : '没有可复制的 AI 修正原文。' }, { immediate: true });
     return this.getStreamingAiPanelState();
   }
 
   private copyStreamingAiSummary(): StreamingAiPanelState {
-    const text = sanitizeStreamingAiText(this.streamingAiState.ai_text || '');
+    const settings = this.getStreamingRewriteSettings(this.settingsStore.getSettings());
+    const text = this.normalizeTranscriptText(
+      sanitizeStreamingAiText(this.streamingAiState.ai_text || ''),
+      settings
+    );
     clipboard.writeText(text);
     this.patchStreamingAiPanelState({ status_text: text ? '整理稿已复制到剪贴板。' : '没有可复制的整理稿。' }, { immediate: true });
     return this.getStreamingAiPanelState();
   }
 
   private async applyStreamingAiRefinedRaw(): Promise<StreamingAiPanelState> {
-    const refinedText = sanitizeStreamingAiText(this.streamingAiState.refined_raw_text || this.streamingAiState.raw_text || '');
+    const settings = this.getStreamingRewriteSettings(this.settingsStore.getSettings());
+    const refinedText = this.normalizeTranscriptText(
+      sanitizeStreamingAiText(this.streamingAiState.refined_raw_text || this.streamingAiState.raw_text || ''),
+      settings
+    );
     if (!refinedText) {
       this.patchStreamingAiPanelState({
         apply_status_text: '没有可带入的 AI 修正原文。',
@@ -726,7 +769,11 @@ class TypenewApp {
   }
 
   private async applyStreamingAiSummary(): Promise<StreamingAiPanelState> {
-    const summaryText = sanitizeStreamingAiText(this.streamingAiState.ai_text || '');
+    const settings = this.getStreamingRewriteSettings(this.settingsStore.getSettings());
+    const summaryText = this.normalizeTranscriptText(
+      sanitizeStreamingAiText(this.streamingAiState.ai_text || ''),
+      settings
+    );
     if (!summaryText) {
       this.patchStreamingAiPanelState({
         apply_status_text: '没有可带入的整理稿。',
@@ -1168,6 +1215,8 @@ class TypenewApp {
       settings: this.settingsStore.getSettings(),
       processResourcesPath: process.resourcesPath,
       appPath: app.getAppPath(),
+      hotwordManager: this.asrHotwordManager,
+      hotwordContext: this.buildAsrHotwordContext(),
     });
     if (generation !== this.asrInitializationGeneration) {
       engine?.destroy();
@@ -1394,6 +1443,17 @@ class TypenewApp {
     const modelLabel = settings.recognition_mode === 'streaming_output'
       ? this.getStreamingModelLabel(settings)
       : this.getVoicePackageLabel(settings);
+    const dictionaryStats = this.dictionaryStore.getViewData().stats;
+    const diagnosticsBase = {
+      itn_enabled: true,
+      hotwords_supported: false,
+      hotwords_enabled: false,
+      hotwords_count: 0,
+      hotwords_path: '',
+      code_switch_lexicon_count: this.codeSwitchLexicon.getEntryCount(),
+      dictionary_count: dictionaryStats.enabled,
+      normalization_mode: '保守转换',
+    };
 
     try {
       const engine = await initializeAsrEngine({
@@ -1401,6 +1461,8 @@ class TypenewApp {
         settings,
         processResourcesPath: process.resourcesPath,
         appPath: app.getAppPath(),
+        hotwordManager: this.asrHotwordManager,
+        hotwordContext: this.buildAsrHotwordContext(),
       });
 
       if (!engine) {
@@ -1412,9 +1474,11 @@ class TypenewApp {
           backend: '未配置',
           runtime: '未配置',
           message: '没有找到匹配的模型目录或配置',
+          ...diagnosticsBase,
         };
       }
 
+      const hotwordStatus = engine.getHotwordStatus();
       return {
         ok: true,
         mode,
@@ -1423,10 +1487,16 @@ class TypenewApp {
         backend: this.describeProvider(engine.getActiveProvider()),
         runtime: `已就绪 · ${this.describeProvider(engine.getActiveProvider())}`,
         message: '模型可加载，当前配置有效',
+        ...diagnosticsBase,
+        hotwords_supported: hotwordStatus.supported,
+        hotwords_enabled: hotwordStatus.enabled,
+        hotwords_count: hotwordStatus.count,
+        hotwords_path: hotwordStatus.path ?? '',
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error('ASR diagnostics failed:', error);
+      const hotwordStatus = this.asrEngine?.getHotwordStatus();
       return {
         ok: false,
         mode,
@@ -1435,6 +1505,11 @@ class TypenewApp {
         backend: this.asrEngine ? this.describeProvider(this.asrEngine.getActiveProvider()) : '未配置',
         runtime: this.asrEngine ? `已就绪 · ${this.describeProvider(this.asrEngine.getActiveProvider())}` : '未配置',
         message,
+        ...diagnosticsBase,
+        hotwords_supported: hotwordStatus?.supported ?? false,
+        hotwords_enabled: hotwordStatus?.enabled ?? false,
+        hotwords_count: hotwordStatus?.count ?? 0,
+        hotwords_path: hotwordStatus?.path ?? '',
       };
     }
   }
@@ -1832,6 +1907,8 @@ class TypenewApp {
         settings,
         processResourcesPath: process.resourcesPath,
         appPath: app.getAppPath(),
+        hotwordManager: this.asrHotwordManager,
+        hotwordContext: this.buildAsrHotwordContext(),
       }).then((engine) => {
         this.translationAsrEngine = engine;
         if (engine) {
@@ -1902,11 +1979,41 @@ class TypenewApp {
   ): string {
     const cleaned = cleanupTranscript(text, settings);
     const dictionaryApplied = this.dictionaryStore.applyToText(cleaned, options);
-    const codeSwitchApplied = this.codeSwitchLexicon.applyToText(dictionaryApplied, options).text;
-    return applyVoiceFormattingCommands(codeSwitchApplied, {
+    const codeSwitchResult = this.codeSwitchLexicon.applyToText(dictionaryApplied, options);
+    const normalized = this.normalizeTranscriptText(codeSwitchResult.text, settings, {
+      ...options,
+      extraPreserveTerms: codeSwitchResult.matchedTerms,
+    });
+    return applyVoiceFormattingCommands(normalized, {
       partial: options.partial,
       enabled: settings.voice_formatting_enabled,
     }).trim();
+  }
+
+  private normalizeTranscriptText(
+    text: string,
+    settings: Settings,
+    options: { partial?: boolean; extraPreserveTerms?: string[] } = {}
+  ): string {
+    if (!text.trim()) {
+      return text;
+    }
+
+    const preserveTerms = Array.from(new Set([
+      ...this.dictionaryStore.getMatchedTerms(text, 80),
+      ...this.codeSwitchLexicon.getMatchedTerms(text, 80),
+      ...(options.extraPreserveTerms ?? []),
+    ]));
+
+    return this.textNormalizationEngine.normalize(text, {
+      mode: options.partial
+        ? 'streaming_partial'
+        : settings.recognition_mode === 'streaming_output'
+          ? 'streaming_final'
+          : 'non_streaming',
+      strength: 'conservative',
+      preserveTerms,
+    });
   }
 
   private applyFallbackPunctuation(text: string, settings: Settings): string {
@@ -1934,7 +2041,7 @@ class TypenewApp {
     settings: Settings,
     final = false
   ): LocalChineseRewriteResult {
-    const cleanText = stripUnknownTokens(text);
+    const cleanText = this.normalizeTranscriptText(stripUnknownTokens(text), settings, { partial: !final });
     const dictionaryTerms = this.dictionaryStore.getMatchedTerms(cleanText, 60);
     const codeSwitchTerms = this.codeSwitchLexicon.getMatchedTerms(cleanText, 60);
     return rewriteChineseLocally({
@@ -1955,7 +2062,7 @@ class TypenewApp {
     statusText: string;
     error?: string;
   }> {
-    const cleanText = stripUnknownTokens(text);
+    const cleanText = this.normalizeTranscriptText(stripUnknownTokens(text), settings, { partial: !final });
     const fallbackRewrite = this.buildLocalChineseRewrite(cleanText, settings, final);
     const punctuationResult = await this.semanticPunctuationEngine.restorePunctuation(cleanText, {
       final,
@@ -1973,10 +2080,17 @@ class TypenewApp {
       const refinedRawText = sanitizeStreamingAiText(modelRewrite.refinedRawText)
         || sanitizeStreamingAiText(punctuationText)
         || fallbackRewrite.refinedRawText;
+      const normalizedRefinedRawText = this.normalizeTranscriptText(refinedRawText, settings, { partial: !final });
+      const normalizedStructuredText = this.normalizeTranscriptText(
+        sanitizeStreamingAiText(modelRewrite.structuredText),
+        settings,
+        { partial: !final }
+      );
       return {
         rewrite: {
           ...modelRewrite,
-          refinedRawText,
+          refinedRawText: normalizedRefinedRawText,
+          structuredText: normalizedStructuredText || modelRewrite.structuredText,
           preserveTerms: fallbackRewrite.preserveTerms,
         },
         source: 'model',
@@ -2041,7 +2155,7 @@ class TypenewApp {
 
   private async rewriteWithLlm(text: string): Promise<string | null> {
     const settings = this.settingsStore.getSettings();
-    const cleanText = stripUnknownTokens(text);
+    const cleanText = this.normalizeTranscriptText(stripUnknownTokens(text), settings);
 
     if (!settings.llm_rewrite?.enabled) {
       return null;
@@ -2073,10 +2187,16 @@ class TypenewApp {
         voiceFormattingEnabled: settings.voice_formatting_enabled,
       });
 
-      return sanitizeStreamingAiText(result.polishedText || localRewrite.structuredText || localRewrite.refinedRawText);
+      return this.normalizeTranscriptText(
+        sanitizeStreamingAiText(result.polishedText || localRewrite.structuredText || localRewrite.refinedRawText),
+        settings
+      );
     } catch (error) {
       console.error('LLM rewrite failed; falling back to local punctuation rewrite:', error);
-      return sanitizeStreamingAiText(localRewrite.structuredText || localRewrite.refinedRawText);
+      return this.normalizeTranscriptText(
+        sanitizeStreamingAiText(localRewrite.structuredText || localRewrite.refinedRawText),
+        settings
+      );
     }
   }
 
@@ -2161,8 +2281,8 @@ class TypenewApp {
       return;
     }
 
-    const cleanText = stripUnknownTokens(text);
     const streamingSettings = this.getStreamingRewriteSettings(settings);
+    const cleanText = this.normalizeTranscriptText(stripUnknownTokens(text), streamingSettings, { partial: true });
     const modeLabel = this.getStreamingModeLabel(streamingSettings);
     const localRewrite = this.buildLocalChineseRewrite(cleanText, streamingSettings, false);
     const localRefinedRaw = sanitizeStreamingAiText(localRewrite.refinedRawText) || cleanText;
@@ -2268,7 +2388,7 @@ class TypenewApp {
   }
 
   private async updateLocalStreamingAiDraft(rawText: string, settings: Settings, final = false): Promise<void> {
-    const cleanRawText = stripUnknownTokens(rawText);
+    const cleanRawText = this.normalizeTranscriptText(stripUnknownTokens(rawText), settings, { partial: !final });
     if (!settings.streaming_ai_panel_enabled || !cleanRawText.trim()) {
       return;
     }
@@ -2279,10 +2399,16 @@ class TypenewApp {
       return;
     }
     const localRewrite = localRewriteResult.rewrite;
-    const refinedRawText = sanitizeStreamingAiText(
-      final ? localRewrite.refinedRawText : localRewrite.refinedRawText.replace(/[。.]$/u, '')
+    const refinedRawText = this.normalizeTranscriptText(
+      sanitizeStreamingAiText(final ? localRewrite.refinedRawText : localRewrite.refinedRawText.replace(/[。.]$/u, '')),
+      settings,
+      { partial: !final }
     );
-    const structuredText = sanitizeStreamingAiText(localRewrite.structuredText);
+    const structuredText = this.normalizeTranscriptText(
+      sanitizeStreamingAiText(localRewrite.structuredText),
+      settings,
+      { partial: !final }
+    );
     this.patchStreamingAiPanelState({
       active: true,
       status: final ? 'ready' : 'recording',
@@ -2342,7 +2468,7 @@ class TypenewApp {
       return;
     }
 
-    const cleanRawText = stripUnknownTokens(rawText);
+    const cleanRawText = this.normalizeTranscriptText(stripUnknownTokens(rawText), settings, { partial: !final });
     const sessionId = this.streamingSessionId;
     const previousSummary = this.streamingAiState.ai_text.trim();
     const newSegment = cleanRawText.slice(this.streamingAiSubmittedRawLength).trim();
@@ -2388,8 +2514,16 @@ class TypenewApp {
       }
 
       const parsed = parseStreamingAiResult(result.polishedText || localRewrite.structuredText, localRewrite.refinedRawText);
-      const refinedRawText = sanitizeStreamingAiText(parsed.refinedRawText || localRewrite.refinedRawText);
-      const summaryText = sanitizeStreamingAiText(parsed.summaryText || localRewrite.structuredText || previousSummary || newSegment);
+      const refinedRawText = this.normalizeTranscriptText(
+        sanitizeStreamingAiText(parsed.refinedRawText || localRewrite.refinedRawText),
+        settings,
+        { partial: !final }
+      );
+      const summaryText = this.normalizeTranscriptText(
+        sanitizeStreamingAiText(parsed.summaryText || localRewrite.structuredText || previousSummary || newSegment),
+        settings,
+        { partial: !final }
+      );
       this.patchStreamingAiPanelState({
         status: 'ready',
         status_text: final ? '最终整理稿已生成。' : '整理稿已更新；可以继续说。',
@@ -2441,8 +2575,8 @@ class TypenewApp {
         status_text: `API 整理失败，已回退${localRewriteResult.source === 'model' ? '离线断句模型整理稿' : '本地规则整理稿'}。`,
         rewrite_scenario: settings.rewrite_scenario,
         rewrite_scenario_label: getRewriteScenarioLabel(settings.rewrite_scenario),
-        refined_raw_text: sanitizeStreamingAiText(localRewrite.refinedRawText),
-        ai_text: sanitizeStreamingAiText(localRewrite.structuredText),
+        refined_raw_text: this.normalizeTranscriptText(sanitizeStreamingAiText(localRewrite.refinedRawText), settings, { partial: !final }),
+        ai_text: this.normalizeTranscriptText(sanitizeStreamingAiText(localRewrite.structuredText), settings, { partial: !final }),
         can_apply_refined_raw: Boolean((this.streamingPastedText || this.streamingOutputText || cleanRawText).trim()),
         mode_label: this.getStreamingModeLabel(settings),
         ai_status_label: localRewriteResult.source === 'model'
@@ -2915,13 +3049,29 @@ class TypenewApp {
   }
 
   private patchStreamingAiPanelState(patch: Partial<StreamingAiPanelState>, options: { immediate?: boolean } = {}): void {
+    const normalizedPatch = this.normalizeStreamingAiPanelPatch(patch);
     this.streamingAiState = {
       ...this.streamingAiState,
-      ...patch,
+      ...normalizedPatch,
       enabled: this.settingsStore.getSettings().streaming_ai_panel_enabled,
       updated_at: new Date().toISOString(),
     };
     this.scheduleStreamingAiPanelPublish(Boolean(options.immediate));
+  }
+
+  private normalizeStreamingAiPanelPatch(patch: Partial<StreamingAiPanelState>): Partial<StreamingAiPanelState> {
+    const settings = this.getStreamingRewriteSettings(this.settingsStore.getSettings());
+    const normalizedPatch = { ...patch };
+    if (typeof normalizedPatch.raw_text === 'string') {
+      normalizedPatch.raw_text = this.normalizeTranscriptText(normalizedPatch.raw_text, settings);
+    }
+    if (typeof normalizedPatch.refined_raw_text === 'string') {
+      normalizedPatch.refined_raw_text = this.normalizeTranscriptText(normalizedPatch.refined_raw_text, settings);
+    }
+    if (typeof normalizedPatch.ai_text === 'string') {
+      normalizedPatch.ai_text = this.normalizeTranscriptText(normalizedPatch.ai_text, settings);
+    }
+    return normalizedPatch;
   }
 
   private scheduleStreamingAiPanelPublish(immediate = false): void {

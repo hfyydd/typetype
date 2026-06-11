@@ -144,6 +144,10 @@ test("settings UI exposes current LLM rewrite controls without legacy polish fie
   assert.equal(html.includes('id="copy-asr-diagnostics-button"'), true);
   assert.equal(script.includes("runAsrDiagnostics"), true);
   assert.equal(script.includes("formatAsrDiagnostics"), true);
+  assert.equal(script.includes("ASR 热词"), true);
+  assert.equal(script.includes("混输词库条数"), true);
+  assert.equal(script.includes("个人词典条数"), true);
+  assert.equal(script.includes("normalization_mode"), true);
 });
 
 test("settings UI no longer exposes writing profile controls", () => {
