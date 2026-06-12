@@ -255,7 +255,10 @@ async function startRecording(microphoneId = null) {
     recorderAPI.sendStarted();
   } catch (error) {
     await cleanupStream();
-    recorderAPI.sendError(error instanceof Error ? error.message : String(error));
+    const errMsg = error instanceof Error
+      ? (error.stack || `${error.name}: ${error.message}`)
+      : String(error);
+    recorderAPI.sendError(errMsg);
   }
 }
 
@@ -311,7 +314,10 @@ async function stopRecording() {
     const samples16k = downsampleTo16k(samples, context.sampleRate);
     resultBuffer = samples16k.buffer;
   } catch (error) {
-    recorderAPI.sendError(error instanceof Error ? error.message : String(error));
+    const errMsg = error instanceof Error
+      ? (error.stack || `${error.name}: ${error.message}`)
+      : String(error);
+    recorderAPI.sendError(errMsg);
     // Fall through to cleanup even on error so the mic gets released.
   } finally {
     // Cleanup must run and complete before we return so the OS
@@ -323,6 +329,22 @@ async function stopRecording() {
     recorderAPI.sendResult(resultBuffer);
   }
 }
+
+window.addEventListener("error", (event) => {
+  const error = event.error;
+  const msg = error instanceof Error
+    ? (error.stack || `${error.name}: ${error.message}`)
+    : event.message || "Unknown renderer error";
+  recorderAPI.sendError(`[Uncaught Error] ${msg}`);
+});
+
+window.addEventListener("unhandledrejection", (event) => {
+  const reason = event.reason;
+  const msg = reason instanceof Error
+    ? (reason.stack || `${reason.name}: ${reason.message}`)
+    : String(reason) || "Unknown promise rejection";
+  recorderAPI.sendError(`[Unhandled Rejection] ${msg}`);
+});
 
 recorderAPI.onStart(startRecording);
 recorderAPI.onStop(stopRecording);

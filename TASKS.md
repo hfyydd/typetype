@@ -1578,3 +1578,24 @@ new regression.
 - Packaged Intel (x64) DMG: `release/typetype-0.3.18.dmg`
 - Overrode target to build only DMG (no slow updater zip).
 - Copied to user's Desktop as: `/Users/hanfeng/Desktop/typetype-0.3.18-x64.dmg`
+
+## Round 12 Notes — 2026-06-12
+
+**Goal.** Investigate the generic `Failed to start recording: Error` reported by the user on the Intel (x64) build. Upgrade the recorder window's error capture mechanism to log detailed error messages/stack traces to help pinpoint the root cause (such as macOS TCC microphone permission blocks).
+
+### Implementation
+
+- Identified that the catch block in the hidden `recorderWindow` (`src/recorder/recorder.js`) only forwarded `error.message` to the main process via IPC. For certain `DOMException` or browser security failures (like `NotAllowedError` from `getUserMedia`), `.message` is empty, leading to a generic `Error` with no details.
+- Added global uncaught error and unhandled rejection listeners to `src/recorder/recorder.js` to catch and report asynchronous/load-time exceptions.
+- Upgraded the error handling inside `startRecording` and `stopRecording` in `src/recorder/recorder.js` to extract and forward the full stack trace (`error.stack`) or `error.name: error.message`, ensuring detailed logs reach the main process.
+- Bumped app version to `0.3.19`.
+
+### Verification
+
+- Run `node --test test/*.test.js` -> 149 pass / 0 fail. All unit and structural tests pass cleanly.
+
+### Packaging
+
+- Packaged Intel (x64) DMG: `release/typetype-0.3.19.dmg`
+- Overrode target to build only DMG.
+- Copied to user's Desktop as: `/Users/hanfeng/Desktop/typetype-0.3.19-x64.dmg`
