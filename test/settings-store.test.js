@@ -148,6 +148,13 @@ test("settings UI exposes current LLM rewrite controls without legacy polish fie
   assert.equal(script.includes("混输词库条数"), true);
   assert.equal(script.includes("个人词典条数"), true);
   assert.equal(script.includes("normalization_mode"), true);
+  assert.equal(script.includes("本地断句增强"), true);
+  assert.equal(script.includes("ONNX 绑定文件"), true);
+  assert.equal(script.includes("installRuntimeDependency"), true);
+  assert.equal(script.includes("安装/修复系统运行库"), true);
+  assert.equal(script.includes("VC++ 运行库"), true);
+  assert.equal(html.includes("安全软件信任 typetype 安装目录"), true);
+  assert.equal(html.includes("无需自行找下载链接"), true);
 });
 
 test("settings UI no longer exposes writing profile controls", () => {

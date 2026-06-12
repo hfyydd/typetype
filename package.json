@@ -1,6 +1,6 @@
 {
   "name": "typetype",
-  "version": "0.3.2",
+  "version": "0.3.5",
   "description": "typetype local voice input tool with offline ASR",
   "main": "dist-electron/main.js",
   "author": "typetype",
@@ -56,7 +56,8 @@
           "!models/**",
           "!punctuation-models/**",
           "!translation-models/**",
-          "!runtimes/**"
+          "!runtimes/**",
+          "!runtime-installers/**"
         ]
       }
     ],
@@ -88,6 +89,13 @@
       {
         "from": "resources/runtimes",
         "to": "runtimes",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/runtime-installers",
+        "to": "runtime-installers",
         "filter": [
           "**/*"
         ]

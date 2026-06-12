@@ -24,6 +24,7 @@ export function registerIpcHandlers(
   openLogDirectory: () => void,
   openFeedbackEmail: () => void,
   runAsrDiagnostics: () => Promise<AsrDiagnostics>,
+  installRuntimeDependency: () => Promise<{ ok: boolean; message: string; exit_code?: number; log_path?: string }>,
   startRecording: () => void,
   stopRecording: () => void,
   testLlmConnection: (config: LlmRewriteConfig) => Promise<{ ok: boolean; latency_ms: number; error?: string }>,
@@ -57,6 +58,7 @@ export function registerIpcHandlers(
   ipcMain.handle('open_log_directory', () => openLogDirectory());
   ipcMain.handle('open_feedback_email', () => openFeedbackEmail());
   ipcMain.handle('run_asr_diagnostics', () => runAsrDiagnostics());
+  ipcMain.handle('install_runtime_dependency', () => installRuntimeDependency());
   ipcMain.handle('start_recording', () => startRecording());
   ipcMain.handle('stop_recording', () => stopRecording());
   ipcMain.handle('test_llm_connection', (_event, config) => testLlmConnection(config));

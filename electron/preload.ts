@@ -23,6 +23,7 @@ export interface ElectronAPI {
   openLogDirectory: () => Promise<void>;
   openFeedbackEmail: () => Promise<void>;
   runAsrDiagnostics: () => Promise<AsrDiagnostics>;
+  installRuntimeDependency: () => Promise<{ ok: boolean; message: string; exit_code?: number; log_path?: string }>;
   startRecording: () => Promise<void>;
   stopRecording: () => Promise<void>;
   testLlmConnection: (config: LlmRewriteConfig) => Promise<{ ok: boolean; latency_ms: number; error?: string }>;
@@ -61,6 +62,7 @@ const api: ElectronAPI = {
   openLogDirectory: () => ipcRenderer.invoke('open_log_directory'),
   openFeedbackEmail: () => ipcRenderer.invoke('open_feedback_email'),
   runAsrDiagnostics: () => ipcRenderer.invoke('run_asr_diagnostics'),
+  installRuntimeDependency: () => ipcRenderer.invoke('install_runtime_dependency'),
   startRecording: () => ipcRenderer.invoke('start_recording'),
   stopRecording: () => ipcRenderer.invoke('stop_recording'),
   testLlmConnection: (config: LlmRewriteConfig) => ipcRenderer.invoke('test_llm_connection', config),

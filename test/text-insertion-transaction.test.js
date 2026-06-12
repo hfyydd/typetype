@@ -74,3 +74,63 @@ test("TextInsertionTransaction does not count failed streaming paste as inserted
   assert.equal(tx.getInsertedText(), "");
   assert.match(result.error, /target window/);
 });
+
+test("TextInsertionTransaction replaces only the inserted tail text", async () => {
+  const calls = [];
+  const autoPaste = {
+    async writeClipboard(text) {
+      calls.push(["clipboard", text]);
+    },
+    async pasteToApp(target) {
+      calls.push(["paste", target]);
+      return { ok: true, targetAppId: target };
+    },
+    async replaceRecentTextInApp(target, text, chars) {
+      calls.push(["replace-tail", target, text, chars]);
+      return { ok: true, targetAppId: target };
+    },
+  };
+  const tx = new TextInsertionTransaction(autoPaste);
+  tx.reset("wechat");
+
+  await tx.pasteAppend("我的手机号是一三八一二三四五六七八", "raw", "wechat");
+  const charsToReplace = Array.from("手机号是一三八一二三四五六七八").length;
+  const result = await tx.replaceInsertedTailText("手机号是13812345678", charsToReplace, "wechat", {
+    respectExternalClipboardChange: false,
+  });
+
+  assert.equal(result.status, "replaced");
+  assert.equal(tx.getInsertedText(), "我的手机号是13812345678");
+  assert.deepEqual(calls.at(-1), ["replace-tail", "wechat", "手机号是13812345678", charsToReplace]);
+});
+
+test("TextInsertionTransaction uses fast paste for follow-up streaming appends", async () => {
+  const calls = [];
+  const autoPaste = {
+    async writeClipboard(text) {
+      calls.push(["clipboard", text]);
+    },
+    async pasteToApp(target) {
+      calls.push(["safe-paste", target]);
+      return { ok: true, targetAppId: target };
+    },
+    async pasteToAppFast(target) {
+      calls.push(["fast-paste", target]);
+      return { ok: true, targetAppId: target };
+    },
+    async replaceRecentTextInApp() {
+      throw new Error("should not replace");
+    },
+  };
+  const tx = new TextInsertionTransaction(autoPaste);
+  tx.reset("wechat");
+
+  await tx.pasteAppendWithOptions("今天", "今天", "wechat", { fast: true });
+  await tx.pasteAppendWithOptions("开会", "今天开会", "wechat", { fast: true });
+
+  assert.deepEqual(calls.filter((call) => call[0].endsWith("paste")), [
+    ["safe-paste", "wechat"],
+    ["fast-paste", "wechat"],
+  ]);
+  assert.equal(tx.getInsertedText(), "今天开会");
+});

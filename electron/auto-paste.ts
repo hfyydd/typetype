@@ -263,6 +263,23 @@ export class AutoPaste {
     }
   }
 
+  async pasteToAppFast(bundleId?: string | null): Promise<PasteOperationResult> {
+    try {
+      await this.paste();
+      return {
+        ok: true,
+        targetAppId: bundleId ?? null,
+        foregroundAppId: null,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        targetAppId: bundleId ?? null,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
   async replaceRecentTextInApp(
     bundleId: string | null | undefined,
     replacementText: string,

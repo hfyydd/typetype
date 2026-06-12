@@ -145,11 +145,18 @@
           element.classList.toggle("empty", !value?.trim());
         }
 
+        function cleanStatusText(value) {
+          const text = value?.trim() || "等待录音。";
+          if (/ONNX\s*Runtime|onnxruntime|Visual C\+\+|系统运行库|app\.asar|node_modules|The operating system cannot run %1/i.test(text)) {
+            return "本地断句增强暂不可用，已使用基础断句；可在设置页修复系统运行库。";
+          }
+          return text;
+        }
+
         function render(state) {
           statusCard.dataset.tone = toneFor(state.status);
           statusTitle.textContent = statusTitleFor(state.status);
-          const errorSuffix = state.last_error ? `\n${state.last_error}` : "";
-          statusText.textContent = `${state.status_text || "等待录音。"}${errorSuffix}`;
+          statusText.textContent = cleanStatusText(state.status_text);
           const reviewText = state.last_review_at
             ? `最近整理：${new Date(state.last_review_at).toLocaleTimeString()}`
             : "尚未整理";

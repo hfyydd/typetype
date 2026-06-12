@@ -54,7 +54,7 @@ import {
 } from './translation-model-registry';
 import { getRewriteScenarioLabel, getRewriteScenarioPrompt, testLlmConnection } from './llm-rewrite';
 import { rewriteWithPreferredLlm } from './llm-route';
-import { StreamingSegmenter } from './streaming-segmentation';
+import { StreamingSegmenter, StreamingSegmentEvent } from './streaming-segmentation';
 import { ensureStreamingFinalPunctuation, prefixStreamingBoundaryPunctuation } from './streaming-punctuation';
 import { applyBasicTranscriptPunctuation } from './transcript-punctuation';
 import { applyVoiceFormattingCommands } from './transcript-formatting';
@@ -70,6 +70,11 @@ import { AiRewriteGate } from './ai-rewrite-gate';
 import { SemanticPunctuationEngine } from './semantic-punctuation-engine';
 import { TextNormalizationEngine } from './text-normalization-engine';
 import { AsrHotwordManager } from './asr-hotword-manager';
+import { RuntimeDependencyManager } from './runtime-dependency-manager';
+import {
+  StreamingRealtimeTextProcessor,
+  StreamingTailCorrection,
+} from './streaming-realtime-text-processor';
 
 const FEEDBACK_EMAIL = 'feedback@typetype.app';
 const WINDOWS_LOGIN_ITEM_NAME = 'typetype';
@@ -80,18 +85,26 @@ const WINDOWS_LEGACY_LOGIN_ITEM_NAMES = [
 const STREAMING_AI_MIN_CHARS = 45;
 const STREAMING_AI_FAST_MIN_CHARS = 18;
 const STREAMING_AI_FAST_COOLDOWN_MS = 4500;
-const STREAMING_PASTE_INITIAL_CHARS = 4;
-const STREAMING_PASTE_INITIAL_INTERVAL_MS = 320;
-const STREAMING_PASTE_MIN_CHARS = 14;
-const STREAMING_PASTE_MIN_INTERVAL_MS = 700;
-const STREAMING_PASTE_STARTUP_WINDOW_CHARS = 28;
-const STREAMING_PANEL_THROTTLE_MS = 250;
+const STREAMING_PASTE_INITIAL_CHARS = 1;
+const STREAMING_PASTE_INITIAL_INTERVAL_MS = 0;
+const STREAMING_PASTE_MIN_CHARS = 1;
+const STREAMING_PASTE_MIN_INTERVAL_MS = 0;
+const STREAMING_PASTE_STARTUP_WINDOW_CHARS = 36;
+const STREAMING_PANEL_THROTTLE_MS = 100;
 const STREAMING_AUDIO_CACHE_SECONDS = 120;
+const STREAMING_TAIL_CORRECTION_MIN_INTERVAL_MS = 500;
+
+interface StreamingCursorCommitState {
+  committedText: string;
+  committedSourceText: string;
+  committedAt: number;
+  sessionId: number;
+}
 
 function defaultPreloadStatus(): PreloadStatusView {
   return {
     asr: { status: 'warming', label: '识别引擎', detail: '正在后台预热识别引擎。' },
-    punctuation: { status: 'warming', label: '本地断句模型', detail: '正在后台加载离线标点恢复模型。' },
+    punctuation: { status: 'warming', label: '本地断句增强', detail: '正在后台检查本地断句增强能力。' },
     translation: { status: 'warming', label: '翻译资源', detail: '正在检查本地翻译资源。' },
     dictionary: { status: 'warming', label: '词典索引', detail: '正在加载本地词典。' },
     llm: { status: 'not_configured', label: 'LLM 配置', detail: '未启用 LLM 润写。' },
@@ -144,6 +157,18 @@ class TypenewApp {
   private streamingSegmenter: StreamingSegmenter | null = null;
   private streamingPendingBoundaryPunctuation = false;
   private streamingLastPasteAt = 0;
+  private streamingTailCorrectionLastAt = 0;
+  private streamingTailCorrectionInFlight = false;
+  private streamingTailReplacementActive = false;
+  private streamingTailCorrectionSuspended = false;
+  private streamingPendingTailCorrection: StreamingTailCorrection | null = null;
+  private streamingCursorCommitState: StreamingCursorCommitState = {
+    committedText: '',
+    committedSourceText: '',
+    committedAt: 0,
+    sessionId: 0,
+  };
+  private streamingPendingAiReviewAfterCommit = false;
   private streamingAudioCache = new RollingAudioCache(16000, STREAMING_AUDIO_CACHE_SECONDS);
   private streamingAiState: StreamingAiPanelState = {
     enabled: false,
@@ -181,6 +206,11 @@ class TypenewApp {
   private semanticPunctuationEngine: SemanticPunctuationEngine;
   private textNormalizationEngine: TextNormalizationEngine;
   private asrHotwordManager: AsrHotwordManager;
+  private runtimeDependencyManager: RuntimeDependencyManager;
+  private streamingRealtimeTextProcessor: StreamingRealtimeTextProcessor;
+  private runtimeDependencyPromptShown = false;
+  private runtimeDependencyPromptSuppressed = false;
+  private runtimeDependencyPromptInFlight = false;
   private shortcutWatchdogTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
@@ -203,6 +233,16 @@ class TypenewApp {
     this.textNormalizationEngine = new TextNormalizationEngine();
     this.asrHotwordManager = new AsrHotwordManager({
       dataDir: this.getDataDir(),
+    });
+    this.streamingRealtimeTextProcessor = new StreamingRealtimeTextProcessor({
+      textNormalizationEngine: this.textNormalizationEngine,
+      applyDictionary: (text, options) => this.dictionaryStore.applyToText(text, options),
+      applyCodeSwitch: (text, options) => this.codeSwitchLexicon.applyToText(text, options),
+    });
+    this.runtimeDependencyManager = new RuntimeDependencyManager({
+      resourcesPath: this.getResourcesPath(),
+      processResourcesPath: process.resourcesPath,
+      appPath: app.getAppPath(),
     });
     const dictionaryStats = this.dictionaryStore.getViewData().stats;
     this.preloadStatus.dictionary = {
@@ -429,6 +469,7 @@ class TypenewApp {
       () => this.openLogDirectory(),
       () => this.openFeedbackEmail(),
       () => this.runAsrDiagnostics(),
+      () => this.installRuntimeDependency(),
       () => this.startRecording(),
       () => this.stopRecording(),
       (config) => testLlmConnection(config),
@@ -1121,28 +1162,38 @@ class TypenewApp {
     this.preloadStatus.llm = this.getLlmPreloadStatus(this.settingsStore.getSettings());
   }
 
-  private preloadPunctuationStatus(): void {
-    this.preloadStatus.punctuation = {
-      status: 'warming',
-      label: '本地断句模型',
-      detail: '正在后台加载离线标点恢复模型。',
-    };
-    this.publishSettingsViewData();
+  private preloadPunctuationStatus(options: { keepReadyWhileChecking?: boolean } = {}): void {
+    if (!options.keepReadyWhileChecking) {
+      this.preloadStatus.punctuation = {
+        status: 'warming',
+        label: '本地断句增强',
+        detail: '正在后台检查本地断句增强能力。',
+      };
+      this.publishSettingsViewData();
+    }
 
     void this.localPunctuationEngine.warmup()
       .then(() => {
         this.preloadStatus.punctuation = {
           status: 'ready',
-          label: '本地断句模型',
-          detail: '离线标点恢复模型已就绪，涉密模式不联网也能补标点和断句。',
+          label: '本地断句增强',
+          detail: '本地断句增强已就绪，涉密模式不联网也能补标点和断句。',
         };
         this.publishSettingsViewData();
       })
       .catch((error) => {
+        const status = this.localPunctuationEngine.getStatus();
+        const diagnostics = this.localPunctuationEngine.getDiagnostics();
+        const runtimeStatus = this.runtimeDependencyManager.getStatus(
+          diagnostics.last_raw_error || diagnostics.last_error || (error instanceof Error ? error.message : String(error))
+        );
         this.preloadStatus.punctuation = {
-          status: 'error',
-          label: '本地断句模型',
-          detail: `模型未就绪，使用规则兜底：${error instanceof Error ? error.message : String(error)}`,
+          status: runtimeStatus.status === 'ready' ? 'ready' : 'error',
+          label: '本地断句增强',
+          detail: runtimeStatus.user_message || status.detail,
+          action: runtimeStatus.action,
+          action_label: runtimeStatus.action_label,
+          action_enabled: runtimeStatus.can_install,
         };
         this.publishSettingsViewData();
       });
@@ -1444,6 +1495,11 @@ class TypenewApp {
       ? this.getStreamingModelLabel(settings)
       : this.getVoicePackageLabel(settings);
     const dictionaryStats = this.dictionaryStore.getViewData().stats;
+    const punctuationStatus = this.localPunctuationEngine.getStatus();
+    const punctuationDiagnostics = this.localPunctuationEngine.getDiagnostics();
+    const runtimeDependencyStatus = this.runtimeDependencyManager.getStatus(
+      punctuationDiagnostics.last_raw_error || punctuationDiagnostics.last_error
+    );
     const diagnosticsBase = {
       itn_enabled: true,
       hotwords_supported: false,
@@ -1453,6 +1509,20 @@ class TypenewApp {
       code_switch_lexicon_count: this.codeSwitchLexicon.getEntryCount(),
       dictionary_count: dictionaryStats.enabled,
       normalization_mode: '保守转换',
+      punctuation_ready: punctuationStatus.ready,
+      punctuation_available: punctuationStatus.available,
+      punctuation_detail: punctuationStatus.detail,
+      punctuation_runtime_native_dir: punctuationDiagnostics.native_dir,
+      punctuation_runtime_binding_exists: punctuationDiagnostics.binding_exists,
+      punctuation_runtime_dll_exists: punctuationDiagnostics.runtime_dll_exists,
+      punctuation_directml_dll_exists: punctuationDiagnostics.directml_dll_exists,
+      punctuation_last_error: punctuationDiagnostics.last_error,
+      punctuation_last_raw_error: punctuationDiagnostics.last_raw_error,
+      runtime_dependency_status: runtimeDependencyStatus.status,
+      vc_redist_installed: runtimeDependencyStatus.vc_redist_installed,
+      vc_redist_version: runtimeDependencyStatus.vc_redist_version,
+      vc_redist_installer_exists: runtimeDependencyStatus.vc_redist_installer_exists,
+      vc_redist_install_log: runtimeDependencyStatus.vc_redist_install_log,
     };
 
     try {
@@ -1514,6 +1584,23 @@ class TypenewApp {
     }
   }
 
+  private async installRuntimeDependency(): Promise<{ ok: boolean; message: string; exit_code?: number; log_path?: string }> {
+    const result = this.runtimeDependencyManager.installVcRedist();
+    if (result.ok) {
+      this.localPunctuationEngine.reset();
+      const runtimeStatus = this.runtimeDependencyManager.getStatus('');
+      this.preloadStatus.punctuation = {
+        status: 'ready',
+        label: '本地断句增强',
+        detail: runtimeStatus.user_message || result.message,
+      };
+      this.publishSettingsViewData();
+      this.preloadPunctuationStatus({ keepReadyWhileChecking: true });
+    }
+    this.publishSettingsViewData();
+    return result;
+  }
+
   private async captureOutputTarget(): Promise<string | null> {
     try {
       const target = await this.autoPaste.captureFrontmostApp();
@@ -1571,6 +1658,13 @@ class TypenewApp {
       this.streamingAutoPasteSuspended = false;
       this.streamingPendingBoundaryPunctuation = false;
       this.streamingLastPasteAt = 0;
+      this.streamingTailCorrectionLastAt = 0;
+      this.streamingTailCorrectionInFlight = false;
+      this.streamingTailReplacementActive = false;
+      this.streamingTailCorrectionSuspended = false;
+      this.streamingPendingTailCorrection = null;
+      this.streamingRealtimeTextProcessor.reset();
+      this.resetStreamingCursorCommitState();
       this.streamingSegmenter = null;
       this.streamingAudioCache.reset();
       const recorderReadyPromise = process.platform === 'win32'
@@ -1990,6 +2084,14 @@ class TypenewApp {
     }).trim();
   }
 
+  private cleanupStreamingRealtimeTranscript(text: string, settings: Settings): string {
+    const cleaned = cleanupTranscript(text, settings);
+    return applyVoiceFormattingCommands(cleaned, {
+      partial: true,
+      enabled: settings.voice_formatting_enabled,
+    }).trim();
+  }
+
   private normalizeTranscriptText(
     text: string,
     settings: Settings,
@@ -2104,10 +2206,68 @@ class TypenewApp {
       rewrite: fallbackRewrite,
       source: 'rules',
       statusText: punctuationResult.error
-        ? `本地断句模型未就绪，使用规则兜底：${punctuationResult.error}`
+        ? this.getPunctuationFallbackStatusText(punctuationResult.error)
         : '本地规则整理已完成，不联网。',
       error: punctuationResult.error,
     };
+  }
+
+  private getPunctuationFallbackStatusText(error: string): string {
+    if (error) {
+      void this.maybePromptRuntimeDependencyRepair(error);
+    }
+    return this.runtimeDependencyManager.getUserFacingPunctuationMessage(error);
+  }
+
+  private async maybePromptRuntimeDependencyRepair(error: string): Promise<void> {
+    if (
+      this.runtimeDependencyPromptSuppressed
+      || this.runtimeDependencyPromptShown
+      || this.runtimeDependencyPromptInFlight
+      || !this.runtimeDependencyManager.isRuntimeEnvironmentError(error)
+    ) {
+      return;
+    }
+
+    const runtimeStatus = this.runtimeDependencyManager.getStatus(error);
+    if (!runtimeStatus.can_install) {
+      return;
+    }
+
+    this.runtimeDependencyPromptShown = true;
+    this.runtimeDependencyPromptInFlight = true;
+    try {
+      const result = await dialog.showMessageBox({
+        type: 'warning',
+        title: '系统运行库需要修复',
+        message: '检测到本机缺少或损坏系统运行库，已自动使用基础断句。',
+        detail: '点击安装/修复后可启用更好的断句效果。安装过程中可能出现 Windows 权限确认。',
+        buttons: ['立即安装', '稍后', '本次不再提醒'],
+        defaultId: 0,
+        cancelId: 1,
+        noLink: true,
+      });
+
+      if (result.response === 2) {
+        this.runtimeDependencyPromptSuppressed = true;
+        return;
+      }
+      if (result.response === 0) {
+        const installResult = await this.installRuntimeDependency();
+        await dialog.showMessageBox({
+          type: installResult.ok ? 'info' : 'error',
+          title: installResult.ok ? '系统运行库已处理' : '系统运行库安装失败',
+          message: installResult.message,
+          detail: installResult.log_path ? `安装日志：${installResult.log_path}` : '',
+          buttons: ['知道了'],
+          noLink: true,
+        });
+      }
+    } catch (promptError) {
+      console.error('Runtime dependency prompt failed:', promptError);
+    } finally {
+      this.runtimeDependencyPromptInFlight = false;
+    }
   }
 
   private autoLearnFromTranscript(text: string, settings: Settings): void {
@@ -2136,6 +2296,13 @@ class TypenewApp {
     this.streamingAutoPasteSuspended = false;
     this.streamingPendingBoundaryPunctuation = false;
     this.streamingLastPasteAt = 0;
+    this.streamingTailCorrectionLastAt = 0;
+    this.streamingTailCorrectionInFlight = false;
+    this.streamingTailReplacementActive = false;
+    this.streamingTailCorrectionSuspended = false;
+    this.streamingPendingTailCorrection = null;
+    this.streamingRealtimeTextProcessor.reset();
+    this.resetStreamingCursorCommitState();
     this.streamingAudioCache.reset();
     this.streamingSegmenter?.reset();
     this.streamingSegmenter = null;
@@ -2151,6 +2318,59 @@ class TypenewApp {
       }, { immediate: true });
     }
     console.log('Streaming ASR session cancelled', { reason });
+  }
+
+  private resetStreamingCursorCommitState(): void {
+    this.streamingCursorCommitState = {
+      committedText: '',
+      committedSourceText: '',
+      committedAt: 0,
+      sessionId: this.streamingSessionId,
+    };
+    this.streamingPendingAiReviewAfterCommit = false;
+  }
+
+  private getStreamingCommittedText(): string {
+    return this.streamingInsertionTransaction.getInsertedText()
+      || this.streamingCursorCommitState.committedText
+      || '';
+  }
+
+  private commitStreamingCursorText(
+    committedText: string,
+    committedSourceText: string,
+    sessionId: number,
+    settings: Settings
+  ): void {
+    if (sessionId !== this.streamingSessionId || !committedText) {
+      return;
+    }
+
+    const committedAt = Date.now();
+    this.streamingCursorCommitState = {
+      committedText,
+      committedSourceText,
+      committedAt,
+      sessionId,
+    };
+    this.streamingPastedText = committedText;
+    this.streamingPastedSourceText = committedSourceText || this.streamingPastedSourceText;
+    if (!this.streamingPastePendingText) {
+      this.streamingOutputText = committedText;
+    }
+
+    this.updateStreamingAiRawText(committedText, settings, { immediate: true });
+    console.log('Streaming cursor text committed before panel update', {
+      sessionId,
+      committed_length: Array.from(committedText).length,
+      cursor_commit_at: committedAt,
+      panel_update_after_commit: true,
+    });
+
+    if (this.streamingPendingAiReviewAfterCommit) {
+      this.streamingPendingAiReviewAfterCommit = false;
+      this.queueStreamingAiReview(committedText, settings);
+    }
   }
 
   private async rewriteWithLlm(text: string): Promise<string | null> {
@@ -2276,16 +2496,18 @@ class TypenewApp {
     }
   }
 
-  private updateStreamingAiRawText(text: string, settings: Settings): void {
+  private updateStreamingAiRawText(
+    text: string,
+    settings: Settings,
+    options: { immediate?: boolean } = {}
+  ): void {
     if (!settings.streaming_ai_panel_enabled) {
       return;
     }
 
     const streamingSettings = this.getStreamingRewriteSettings(settings);
-    const cleanText = this.normalizeTranscriptText(stripUnknownTokens(text), streamingSettings, { partial: true });
+    const cleanText = this.cleanupStreamingRealtimeTranscript(stripUnknownTokens(text), streamingSettings);
     const modeLabel = this.getStreamingModeLabel(streamingSettings);
-    const localRewrite = this.buildLocalChineseRewrite(cleanText, streamingSettings, false);
-    const localRefinedRaw = sanitizeStreamingAiText(localRewrite.refinedRawText) || cleanText;
     this.patchStreamingAiPanelState({
       active: true,
       status: this.streamingAiInFlight ? 'thinking' : 'recording',
@@ -2295,12 +2517,12 @@ class TypenewApp {
       rewrite_scenario: this.streamingRewriteScenario,
       rewrite_scenario_label: getRewriteScenarioLabel(this.streamingRewriteScenario),
       raw_text: cleanText,
-      refined_raw_text: localRefinedRaw,
+      refined_raw_text: '',
       can_apply_refined_raw: Boolean((this.streamingPastedText || this.streamingOutputText || cleanText).trim()),
       mode_label: modeLabel,
       ai_status_label: this.getStreamingAiStatusLabel(streamingSettings),
       last_error: null,
-    });
+    }, { immediate: Boolean(options.immediate) });
   }
 
   private shouldRunStreamingAiReview(
@@ -2349,7 +2571,9 @@ class TypenewApp {
     }
 
     const streamingSettings = this.getStreamingRewriteSettings(settings);
-    const displayText = stripUnknownTokens(this.buildStreamingRawDisplayText(rawText));
+    const displayText = stripUnknownTokens(this.buildStreamingRawDisplayText(rawText, {
+      preferCommitted: !final,
+    }));
     this.updateStreamingAiRawText(displayText, streamingSettings);
 
     if (!this.canUseStreamingAi(streamingSettings)) {
@@ -2375,16 +2599,26 @@ class TypenewApp {
     void this.runStreamingAiReview(displayText, streamingSettings, final);
   }
 
-  private buildStreamingRawDisplayText(currentText: string): string {
+  private buildStreamingRawDisplayText(
+    currentText: string,
+    options: { preferCommitted?: boolean } = {}
+  ): string {
+    const preferCommitted = options.preferCommitted !== false;
+    const committedText = stripUnknownTokens(this.getStreamingCommittedText()).trim();
+    if (preferCommitted && committedText) {
+      return committedText;
+    }
+
     const candidates = [
       currentText,
+      committedText,
       this.streamingOutputText,
       this.streamingPastedText,
       this.streamingPastedSourceText,
       this.streamingLatestText,
     ].map((value) => stripUnknownTokens(value).trim()).filter(Boolean);
 
-    return candidates.sort((a, b) => b.length - a.length)[0] ?? '';
+    return candidates[0] ?? '';
   }
 
   private async updateLocalStreamingAiDraft(rawText: string, settings: Settings, final = false): Promise<void> {
@@ -2412,7 +2646,7 @@ class TypenewApp {
     this.patchStreamingAiPanelState({
       active: true,
       status: final ? 'ready' : 'recording',
-      status_text: final ? localRewriteResult.statusText : this.getStreamingPanelStatusText(settings),
+      status_text: final ? '最终整理稿已生成。' : this.getStreamingPanelStatusText(settings),
       rewrite_scenario: settings.rewrite_scenario,
       rewrite_scenario_label: getRewriteScenarioLabel(settings.rewrite_scenario),
       refined_raw_text: refinedRawText,
@@ -2677,7 +2911,7 @@ class TypenewApp {
   }
 
   private async flushStreamingPasteQueue(sessionId: number): Promise<void> {
-    if (this.streamingPasteInFlight) {
+    if (this.streamingPasteInFlight || this.streamingTailReplacementActive) {
       return;
     }
 
@@ -2686,10 +2920,12 @@ class TypenewApp {
       while (this.streamingPastePendingText && sessionId === this.streamingSessionId) {
         const text = this.streamingPastePendingText;
         this.streamingPastePendingText = '';
-        const result = await this.streamingInsertionTransaction.pasteAppend(
+        const useFastStreamingAppend = this.streamingInsertionTransaction.hasInsertedText();
+        const result = await this.streamingInsertionTransaction.pasteAppendWithOptions(
           text,
           this.streamingPastedSourceText,
-          this.previousAppBundleId
+          this.previousAppBundleId,
+          { fast: useFastStreamingAppend }
         );
         if (result.status !== 'pasted') {
           this.streamingAutoPasteSuspended = true;
@@ -2705,6 +2941,15 @@ class TypenewApp {
           }, { immediate: true });
           break;
         }
+
+        const settings = this.settingsStore.getSettings();
+        const committedText = result.insertedText || this.streamingInsertionTransaction.getInsertedText();
+        this.commitStreamingCursorText(
+          committedText,
+          this.streamingPastedSourceText,
+          sessionId,
+          settings
+        );
       }
     } catch (error) {
       console.error('Streaming paste queue failed:', error);
@@ -2727,6 +2972,95 @@ class TypenewApp {
   private async waitForStreamingPasteQueueToDrain(sessionId: number): Promise<void> {
     while (sessionId === this.streamingSessionId && (this.streamingPasteInFlight || this.streamingPastePendingText)) {
       await new Promise((resolve) => setTimeout(resolve, 30));
+    }
+  }
+
+  private async waitForStreamingTailCorrectionToDrain(sessionId: number): Promise<void> {
+    while (sessionId === this.streamingSessionId && this.streamingTailCorrectionInFlight) {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+    }
+  }
+
+  private scheduleStreamingTailCorrection(correction: StreamingTailCorrection | null, sessionId: number): void {
+    if (
+      !correction
+      || this.streamingTailCorrectionSuspended
+      || this.streamingAutoPasteSuspended
+    ) {
+      return;
+    }
+
+    const now = Date.now();
+    if (now - this.streamingTailCorrectionLastAt < STREAMING_TAIL_CORRECTION_MIN_INTERVAL_MS) {
+      this.streamingPendingTailCorrection = correction;
+      return;
+    }
+
+    if (this.streamingTailCorrectionInFlight) {
+      this.streamingPendingTailCorrection = correction;
+      return;
+    }
+
+    this.streamingTailCorrectionInFlight = true;
+    this.streamingTailCorrectionLastAt = now;
+    void this.applyStreamingTailCorrection(correction, sessionId);
+  }
+
+  private async applyStreamingTailCorrection(
+    correction: StreamingTailCorrection,
+    sessionId: number
+  ): Promise<void> {
+    const startedAt = Date.now();
+    try {
+      await this.waitForStreamingPasteQueueToDrain(sessionId);
+      if (sessionId !== this.streamingSessionId || this.streamingTailCorrectionSuspended) {
+        return;
+      }
+
+      this.streamingTailReplacementActive = true;
+      const replaceResult = await this.streamingInsertionTransaction.replaceInsertedTailText(
+        correction.replacementText,
+        correction.charsToReplace,
+        this.previousAppBundleId
+      );
+      if (replaceResult.status === 'replaced') {
+        this.streamingPastedText = replaceResult.insertedText;
+        this.streamingOutputText = replaceResult.insertedText;
+        this.streamingLatestText = correction.correctedRealtimeText;
+        this.streamingRealtimeTextProcessor.acceptAppliedText(correction.correctedRealtimeText);
+        this.commitStreamingCursorText(
+          replaceResult.insertedText,
+          correction.correctedRealtimeText,
+          sessionId,
+          this.settingsStore.getSettings()
+        );
+        console.log('Streaming tail correction replaced recent text', {
+          chars_replaced: replaceResult.charsReplaced,
+          replacement_length: Array.from(correction.replacementText).length,
+          elapsed_ms: Date.now() - startedAt,
+        });
+      } else if (replaceResult.status !== 'no_inserted_text') {
+        this.streamingTailCorrectionSuspended = true;
+        console.warn('Streaming tail correction suspended', {
+          status: replaceResult.status,
+          error: replaceResult.error,
+          elapsed_ms: Date.now() - startedAt,
+        });
+      }
+    } catch (error) {
+      this.streamingTailCorrectionSuspended = true;
+      console.warn('Streaming tail correction failed:', error);
+    } finally {
+      this.streamingTailReplacementActive = false;
+      this.streamingTailCorrectionInFlight = false;
+      const pending = this.streamingPendingTailCorrection;
+      this.streamingPendingTailCorrection = null;
+      if (pending && sessionId === this.streamingSessionId && !this.streamingTailCorrectionSuspended) {
+        this.scheduleStreamingTailCorrection(pending, sessionId);
+      }
+      if (this.streamingPastePendingText && sessionId === this.streamingSessionId) {
+        void this.flushStreamingPasteQueue(sessionId);
+      }
     }
   }
 
@@ -2765,7 +3099,7 @@ class TypenewApp {
   }
 
   private async processSegmentedStreamingSegments(
-    segments: Float32Array[],
+    segments: StreamingSegmentEvent[],
     settings: Settings,
     sessionId: number,
     final = false
@@ -2780,12 +3114,18 @@ class TypenewApp {
       }
 
       try {
-        const asrResult = await this.asrEngine.transcribeRich(segment);
+        const asrResult = await this.asrEngine.transcribeRich(segment.audio);
         if (sessionId !== this.streamingSessionId) {
           return;
         }
 
-        const cleanedSegment = this.cleanupTranscriptWithDictionary(asrResult.text, settings, { partial: !final });
+        const cleanedSegment = final
+          ? this.cleanupTranscriptWithDictionary(asrResult.text, settings)
+          : this.streamingRealtimeTextProcessor.processStableSegment(asrResult.text, settings, {
+            stablePause: true,
+            pauseMs: segment.pauseMs,
+            pauseReason: segment.reason,
+          });
         if (!cleanedSegment) {
           continue;
         }
@@ -2793,7 +3133,6 @@ class TypenewApp {
         const sourceBefore = this.streamingLatestText || this.streamingPastedSourceText || this.streamingOutputText;
         const combinedText = this.appendStreamingStableText(sourceBefore, cleanedSegment);
         this.streamingLatestText = combinedText;
-        this.updateStreamingAiRawText(this.buildStreamingRawDisplayText(combinedText), settings);
 
         if (settings.auto_paste && !this.streamingAutoPasteSuspended) {
           const delta = combinedText.startsWith(this.streamingPastedSourceText)
@@ -2801,14 +3140,21 @@ class TypenewApp {
             : this.appendStreamingStableText('', cleanedSegment);
           if (delta) {
             this.enqueueStreamingPaste(delta, combinedText, sessionId);
+            this.streamingPendingAiReviewAfterCommit = true;
           }
+        } else {
+          this.updateStreamingAiRawText(this.buildStreamingRawDisplayText(combinedText, {
+            preferCommitted: false,
+          }), settings);
+          this.queueStreamingAiReview(combinedText, settings, final);
         }
 
-        this.queueStreamingAiReview(combinedText, settings, final);
         console.log('Segmented streaming ASR segment decoded', {
           sessionId,
           final,
-          segment_samples: segment.length,
+          segment_samples: segment.audio.length,
+          pause_ms: segment.pauseMs,
+          pause_reason: segment.reason,
           text_length: cleanedSegment.length,
           language: asrResult.language,
           confidence: asrResult.confidence,
@@ -2828,6 +3174,7 @@ class TypenewApp {
 
         const completedSegments = this.streamingSegmenter?.push(samples) ?? [];
         const completedSpeechSegment = completedSegments.length > 0;
+        const lastCompletedSegment = completedSegments.at(-1);
         await this.ensureAsrEngineReady();
         const settings = this.settingsStore.getSettings();
 
@@ -2837,6 +3184,7 @@ class TypenewApp {
         }
 
         const text = this.asrEngine?.acceptStreamingAudio(samples) ?? '';
+        const decodedAt = Date.now();
         if (this.streamingChunkLogCount <= 5 || this.streamingChunkLogCount % 20 === 0 || text.length > 0) {
           console.log('Streaming ASR chunk decoded', {
             sessionId,
@@ -2848,16 +3196,18 @@ class TypenewApp {
           return;
         }
 
-        const cleaned = this.cleanupTranscriptWithDictionary(text, settings, { partial: true });
-        if (!cleaned) {
+        const processed = this.streamingRealtimeTextProcessor.processPartial(text, settings, {
+          stablePause: completedSpeechSegment,
+          pauseMs: lastCompletedSegment?.pauseMs ?? 0,
+          pauseReason: lastCompletedSegment?.reason,
+        });
+        if (!processed.realtimeText && !processed.displayDelta) {
           return;
         }
-        this.streamingLatestText = cleaned;
-        this.updateStreamingAiRawText(this.buildStreamingRawDisplayText(cleaned), settings);
-
-        const delta = cleaned.startsWith(this.streamingPastedSourceText)
-          ? cleaned.slice(this.streamingPastedSourceText.length)
-          : '';
+        this.streamingLatestText = processed.stableText || processed.realtimeText;
+        const delta = processed.realtimeText.startsWith(this.streamingOutputText)
+          ? processed.realtimeText.slice(this.streamingOutputText.length)
+          : processed.displayDelta;
 
         const now = Date.now();
         const shouldFlushStreamingPaste = Boolean(
@@ -2871,14 +3221,26 @@ class TypenewApp {
             ? prefixStreamingBoundaryPunctuation(this.streamingOutputText || this.streamingPastedText, delta)
             : delta;
 
-          this.enqueueStreamingPaste(pasteText, cleaned, sessionId);
-          this.updateStreamingAiRawText(this.buildStreamingRawDisplayText(cleaned), settings);
+          this.enqueueStreamingPaste(pasteText, processed.rawText, sessionId);
+          this.scheduleStreamingTailCorrection(processed.tailCorrection, sessionId);
           this.streamingPendingBoundaryPunctuation = false;
+          if (this.streamingChunkLogCount <= 5 || this.streamingChunkLogCount % 20 === 0) {
+            console.log('Streaming realtime fast path enqueued paste before panel work', {
+              sessionId,
+              raw_delta_length: processed.metrics.raw_delta_length,
+              tail_chars_processed: processed.metrics.tail_chars_processed,
+              partial_to_enqueue_ms: Date.now() - decodedAt,
+            });
+          }
+        } else if (!settings.auto_paste || this.streamingAutoPasteSuspended) {
+          this.updateStreamingAiRawText(this.buildStreamingRawDisplayText(processed.realtimeText, {
+            preferCommitted: false,
+          }), settings);
         }
 
         if (completedSpeechSegment && (this.streamingOutputText || this.streamingPastedText)) {
           this.streamingPendingBoundaryPunctuation = true;
-          this.queueStreamingAiReview(this.buildStreamingRawDisplayText(cleaned), settings);
+          this.streamingPendingAiReviewAfterCommit = true;
         }
       })
       .catch((error) => {
@@ -2909,6 +3271,7 @@ class TypenewApp {
     }
 
     await this.waitForStreamingPasteQueueToDrain(sessionId);
+    await this.waitForStreamingTailCorrectionToDrain(sessionId);
 
     const finalRawText = this.isActiveSegmentedStreamingMode(settings)
       ? (this.streamingLatestText || this.streamingOutputText || this.streamingPastedSourceText)
@@ -2918,15 +3281,21 @@ class TypenewApp {
       settings
     );
     const cleanedFinalText = await this.refineStreamingFinalWithOfflineAsr(cleanedStreamingText, settings);
-    const finalText = settings.voice_formatting_enabled && cleanedFinalText.includes('\n')
-      ? this.applyFallbackPunctuation(cleanedFinalText, settings)
-      : ensureStreamingFinalPunctuation(cleanedFinalText);
+    const localFinalRewrite = await this.buildModelAssistedLocalChineseRewrite(cleanedFinalText, settings, true);
+    const finalText = sanitizeStreamingAiText(localFinalRewrite.rewrite.refinedRawText)
+      || (settings.voice_formatting_enabled && cleanedFinalText.includes('\n')
+        ? this.applyFallbackPunctuation(cleanedFinalText, settings)
+        : ensureStreamingFinalPunctuation(cleanedFinalText));
     this.streamingLatestText = '';
 
     if (!finalText) {
       this.streamingSegmenter?.reset();
       this.streamingSegmenter = null;
       this.streamingPendingBoundaryPunctuation = false;
+      this.streamingTailReplacementActive = false;
+      this.streamingTailCorrectionSuspended = false;
+      this.streamingPendingTailCorrection = null;
+      this.streamingPendingAiReviewAfterCommit = false;
       this.streamingAudioCache.reset();
       if (settings.streaming_ai_panel_enabled) {
         this.patchStreamingAiPanelState({
@@ -2944,10 +3313,9 @@ class TypenewApp {
 
     const normalized = this.stateMachine.finishOutput(finalText);
     this.autoLearnFromTranscript(normalized, settings);
-    this.updateStreamingAiRawText(normalized, settings);
-    this.queueStreamingAiReview(normalized, settings, true);
     console.log('Streaming transcription complete', createTranscriptionLogMeta(normalized));
 
+    let finalPanelText = normalized;
     if (settings.auto_paste && !this.streamingAutoPasteSuspended) {
       let autoPasteSucceeded = this.streamingInsertionTransaction.hasInsertedText();
       const finalDelta = finalText.startsWith(this.streamingPastedSourceText)
@@ -2969,6 +3337,13 @@ class TypenewApp {
         if (replaceResult.status === 'replaced') {
           this.streamingPastedText = finalText;
           this.streamingOutputText = finalText;
+          this.streamingCursorCommitState = {
+            committedText: finalText,
+            committedSourceText: finalText,
+            committedAt: Date.now(),
+            sessionId,
+          };
+          finalPanelText = finalText;
           autoPasteSucceeded = true;
           console.log('Streaming final text replaced pasted partials', {
             chars_replaced: replaceResult.charsReplaced,
@@ -2988,6 +3363,7 @@ class TypenewApp {
       this.streamingInsertionTransaction.rememberClipboardText(normalized);
       this.streamingPastedSourceText = finalText;
       this.streamingPastedText = this.streamingPastedText || finalText;
+      finalPanelText = this.getStreamingCommittedText() || finalText;
       if (autoPasteSucceeded) {
         this.stateMachine.markAutoPasteSuccess();
       }
@@ -3000,9 +3376,16 @@ class TypenewApp {
         }, { immediate: true });
       }
     }
+
+    this.updateStreamingAiRawText(finalPanelText, settings, { immediate: true });
+    this.queueStreamingAiReview(finalPanelText, settings, true);
     this.streamingSegmenter?.reset();
     this.streamingSegmenter = null;
     this.streamingPendingBoundaryPunctuation = false;
+    this.streamingTailReplacementActive = false;
+    this.streamingTailCorrectionSuspended = false;
+    this.streamingPendingTailCorrection = null;
+    this.streamingPendingAiReviewAfterCommit = false;
     this.streamingAudioCache.reset();
     this.publishSnapshot();
 
@@ -3060,16 +3443,15 @@ class TypenewApp {
   }
 
   private normalizeStreamingAiPanelPatch(patch: Partial<StreamingAiPanelState>): Partial<StreamingAiPanelState> {
-    const settings = this.getStreamingRewriteSettings(this.settingsStore.getSettings());
     const normalizedPatch = { ...patch };
     if (typeof normalizedPatch.raw_text === 'string') {
-      normalizedPatch.raw_text = this.normalizeTranscriptText(normalizedPatch.raw_text, settings);
+      normalizedPatch.raw_text = stripUnknownTokens(normalizedPatch.raw_text);
     }
     if (typeof normalizedPatch.refined_raw_text === 'string') {
-      normalizedPatch.refined_raw_text = this.normalizeTranscriptText(normalizedPatch.refined_raw_text, settings);
+      normalizedPatch.refined_raw_text = sanitizeStreamingAiText(normalizedPatch.refined_raw_text);
     }
     if (typeof normalizedPatch.ai_text === 'string') {
-      normalizedPatch.ai_text = this.normalizeTranscriptText(normalizedPatch.ai_text, settings);
+      normalizedPatch.ai_text = sanitizeStreamingAiText(normalizedPatch.ai_text);
     }
     return normalizedPatch;
   }

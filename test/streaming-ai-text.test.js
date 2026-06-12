@@ -63,3 +63,25 @@ AI修正原文：
   assert.equal(parsed.refinedRawText.includes("大家好，我是小明"), true);
   assert.equal(parsed.summaryText.includes("Go TO SLEEP"), true);
 });
+
+test("streaming AI sanitizer keeps drafts free of runtime diagnostics", () => {
+  const parsed = parseStreamingAiResult(`
+AI修正原文：
+下一重点是讨论线上更新，先处理补丁下载。
+ONNX Runtime 加载失败：The operating system cannot run %1.
+\\\\?\\C:\\612v9\\resources\\app.asar.unpacked\\node_modules\\onnxruntime-node\\bin\\onnxruntime_binding.node
+
+整理稿：
+一、主要内容
+讨论线上更新和补丁下载。
+请安装 Microsoft Visual C++ 2015-2022 x64。
+整理稿已更新。
+`, "原文");
+
+  assert.equal(parsed.refinedRawText.includes("ONNX"), false);
+  assert.equal(parsed.refinedRawText.includes("resources"), false);
+  assert.equal(parsed.summaryText.includes("Visual C++"), false);
+  assert.equal(parsed.summaryText.includes("整理稿已更新"), false);
+  assert.equal(parsed.refinedRawText.includes("下一重点是讨论线上更新"), true);
+  assert.equal(parsed.summaryText.includes("讨论线上更新和补丁下载"), true);
+});

@@ -236,6 +236,11 @@ body {
   line-height: 1.45;
 }
 
+.preload-status-action {
+  margin-top: 6px;
+  justify-self: start;
+}
+
 .preload-status-item[data-status="ready"],
 .preload-status-item[data-status="configured"] {
   border-color: rgba(15, 118, 110, 0.24);

@@ -16,6 +16,7 @@ test("electron-builder does not package models twice", () => {
     "!punctuation-models/**",
     "!translation-models/**",
     "!runtimes/**",
+    "!runtime-installers/**",
   ]);
 });
 
@@ -29,6 +30,7 @@ test("electron-builder excludes bundled model sample assets from packaged output
     "!punctuation-models/**",
     "!translation-models/**",
     "!runtimes/**",
+    "!runtime-installers/**",
   ]);
   assert.deepEqual(modelEntry?.filter, [
     "**/*",
@@ -56,6 +58,16 @@ test("electron-builder packages offline punctuation model as extra resources", (
   assert.deepEqual(punctuationEntry, {
     from: "resources/punctuation-models",
     to: "punctuation-models",
+    filter: ["**/*"],
+  });
+});
+
+test("electron-builder packages runtime dependency installers as extra resources", () => {
+  const runtimeInstallerEntry = pkg.build.extraResources.find((entry) => entry?.from === "resources/runtime-installers");
+
+  assert.deepEqual(runtimeInstallerEntry, {
+    from: "resources/runtime-installers",
+    to: "runtime-installers",
     filter: ["**/*"],
   });
 });

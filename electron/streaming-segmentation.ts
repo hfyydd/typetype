@@ -1,6 +1,15 @@
+export type StreamingPauseReason = 'soft_pause' | 'hard_pause' | 'max_segment' | 'final';
+
+export interface StreamingSegmentEvent {
+  audio: Float32Array;
+  pauseMs: number;
+  reason: StreamingPauseReason;
+}
+
 export class StreamingSegmenter {
   private readonly minSpeechSamples: number;
   private readonly minSilenceSamples: number;
+  private readonly hardSilenceSamples: number;
   private readonly maxSegmentSamples: number;
   private readonly maxLeadingChunks: number;
   private readonly speechThreshold: number;
@@ -15,6 +24,7 @@ export class StreamingSegmenter {
     options: {
       minSpeechMs?: number;
       minSilenceMs?: number;
+      hardSilenceMs?: number;
       maxSegmentMs?: number;
       speechThreshold?: number;
       maxLeadingChunks?: number;
@@ -22,18 +32,19 @@ export class StreamingSegmenter {
   ) {
     this.minSpeechSamples = Math.round(this.sampleRate * ((options.minSpeechMs ?? 320) / 1000));
     this.minSilenceSamples = Math.round(this.sampleRate * ((options.minSilenceMs ?? 420) / 1000));
+    this.hardSilenceSamples = Math.round(this.sampleRate * ((options.hardSilenceMs ?? 700) / 1000));
     this.maxSegmentSamples = Math.round(this.sampleRate * ((options.maxSegmentMs ?? 6000) / 1000));
     this.maxLeadingChunks = options.maxLeadingChunks ?? 2;
     this.speechThreshold = options.speechThreshold ?? 0.015;
   }
 
-  push(samples: Float32Array): Float32Array[] {
+  push(samples: Float32Array): StreamingSegmentEvent[] {
     if (samples.length === 0) {
       return [];
     }
 
     const voiced = this.isVoiced(samples);
-    const finalized: Float32Array[] = [];
+    const finalized: StreamingSegmentEvent[] = [];
 
     if (voiced) {
       if (!this.active) {
@@ -55,7 +66,10 @@ export class StreamingSegmenter {
         this.voicedSamples >= this.minSpeechSamples &&
         this.trailingSilenceSamples >= this.minSilenceSamples
       ) {
-        finalized.push(this.finishSegment());
+        finalized.push(this.finishSegment(
+          this.trailingSilenceSamples >= this.hardSilenceSamples ? 'hard_pause' : 'soft_pause',
+          this.trailingSilenceSamples
+        ));
       }
     } else {
       this.leadingChunks.push(samples);
@@ -65,19 +79,19 @@ export class StreamingSegmenter {
     }
 
     if (this.active && this.totalCurrentSamples() >= this.maxSegmentSamples) {
-      finalized.push(this.finishSegment());
+      finalized.push(this.finishSegment('max_segment', this.trailingSilenceSamples));
     }
 
-    return finalized.filter((segment) => segment.length > 0);
+    return finalized.filter((segment) => segment.audio.length > 0);
   }
 
-  flush(): Float32Array[] {
+  flush(): StreamingSegmentEvent[] {
     if (!this.active || this.voicedSamples < this.minSpeechSamples) {
       this.reset();
       return [];
     }
 
-    return [this.finishSegment()];
+    return [this.finishSegment('final', this.trailingSilenceSamples)];
   }
 
   reset(): void {
@@ -88,7 +102,7 @@ export class StreamingSegmenter {
     this.trailingSilenceSamples = 0;
   }
 
-  private finishSegment(): Float32Array {
+  private finishSegment(reason: StreamingPauseReason, pauseSamples: number): StreamingSegmentEvent {
     const total = this.totalCurrentSamples();
     const merged = new Float32Array(total);
     let offset = 0;
@@ -97,7 +111,11 @@ export class StreamingSegmenter {
       offset += chunk.length;
     }
     this.reset();
-    return merged;
+    return {
+      audio: merged,
+      pauseMs: Math.round((pauseSamples / this.sampleRate) * 1000),
+      reason,
+    };
   }
 
   private totalCurrentSamples(): number {

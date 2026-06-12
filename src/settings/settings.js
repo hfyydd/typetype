@@ -466,6 +466,7 @@ function renderPreloadStatus(status = {}) {
     <div class="preload-status-item" data-status="${escapeHtml(item.status)}">
       <strong>${escapeHtml(item.label)}</strong>
       <span>${escapeHtml(item.detail)}</span>
+      ${item.action ? `<button type="button" class="settings-secondary-button preload-status-action" data-preload-action="${escapeHtml(item.action)}" ${item.action_enabled === false ? "disabled" : ""}>${escapeHtml(item.action_label || "处理")}</button>` : ""}
     </div>
   `).join("");
 }
@@ -863,6 +864,19 @@ function formatAsrDiagnostics(report) {
     `ASR 热词文件: ${report.hotwords_path || "无"}`,
     `混输词库条数: ${report.code_switch_lexicon_count ?? 0}`,
     `个人词典条数: ${report.dictionary_count ?? 0}`,
+    `本地断句增强: ${report.punctuation_ready ? "已就绪" : report.punctuation_available ? "不可用，已使用基础断句" : "资源缺失，已使用基础断句"}`,
+    `本地断句说明: ${report.punctuation_detail || "无"}`,
+    `ONNX 原生目录: ${report.punctuation_runtime_native_dir || "未找到"}`,
+    `ONNX 绑定文件: ${report.punctuation_runtime_binding_exists ? "存在" : "缺失"}`,
+    `ONNX 运行库: ${report.punctuation_runtime_dll_exists ? "存在" : "缺失"}`,
+    `DirectML 运行库: ${report.punctuation_directml_dll_exists ? "存在" : "缺失或不适用"}`,
+    `本地断句错误: ${report.punctuation_last_error || "无"}`,
+    `本地断句原始错误: ${report.punctuation_last_raw_error || "无"}`,
+    `系统运行库状态: ${report.runtime_dependency_status || "未知"}`,
+    `VC++ 运行库: ${report.vc_redist_installed ? "已安装" : "未检测到"}`,
+    `VC++ 运行库版本: ${report.vc_redist_version || "未知"}`,
+    `VC++ 安装器: ${report.vc_redist_installer_exists ? "已内置" : "缺失"}`,
+    `VC++ 安装日志: ${report.vc_redist_install_log || "无"}`,
     `说明: ${report.message}`,
   ].join("\n");
 }
@@ -957,9 +971,32 @@ async function runAction(command, successMessage, failureMessage = "请求没有
   }
 }
 
+async function handlePreloadAction(action) {
+  if (action !== "install_runtime_dependency") {
+    return;
+  }
+
+  setStatus("正在安装/修复系统运行库，可能会出现 Windows 权限确认…");
+  try {
+    const result = await electronAPI.installRuntimeDependency();
+    setStatus(result.message, result.ok ? "default" : "error");
+    await refreshSettingsView();
+  } catch (error) {
+    setStatus(error?.message || "系统运行库安装没有成功。已写入本地日志。", "error");
+  }
+}
+
 for (const item of navItems) {
   item.addEventListener("click", () => activatePanel(item.dataset.panelTarget));
 }
+
+preloadStatusGrid?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-preload-action]");
+  if (!button || button.disabled) {
+    return;
+  }
+  void handlePreloadAction(button.dataset.preloadAction);
+});
 
 hotkeyProfileDefaultButton.addEventListener("click", () => applyHotkeyProfile("default"));
 hotkeyProfileAltButton.addEventListener("click", () => applyHotkeyProfile("alt"));

@@ -5,6 +5,7 @@ import { PasteOperationResult } from './auto-paste';
 export interface TextInsertionTransactionAutoPaste {
   writeClipboard(text: string): Promise<void>;
   pasteToApp(bundleId?: string | null): Promise<PasteOperationResult>;
+  pasteToAppFast?(bundleId?: string | null): Promise<PasteOperationResult>;
   replaceRecentTextInApp(
     bundleId: string | null | undefined,
     replacementText: string,
@@ -76,6 +77,15 @@ export class TextInsertionTransaction {
   }
 
   async pasteAppend(text: string, sourceText: string, targetAppId: string | null): Promise<TextInsertionPasteResult> {
+    return this.pasteAppendWithOptions(text, sourceText, targetAppId);
+  }
+
+  async pasteAppendWithOptions(
+    text: string,
+    sourceText: string,
+    targetAppId: string | null,
+    options: { fast?: boolean } = {}
+  ): Promise<TextInsertionPasteResult> {
     if (!text) {
       return {
         status: 'pasted',
@@ -85,7 +95,10 @@ export class TextInsertionTransaction {
 
     this.setTargetApp(targetAppId);
     await this.autoPaste.writeClipboard(text);
-    const pasteResult = await this.autoPaste.pasteToApp(this.targetAppId ?? targetAppId);
+    const canUseFastPaste = Boolean(options.fast && this.insertedText && this.autoPaste.pasteToAppFast);
+    const pasteResult = canUseFastPaste
+      ? await this.autoPaste.pasteToAppFast!(this.targetAppId ?? targetAppId)
+      : await this.autoPaste.pasteToApp(this.targetAppId ?? targetAppId);
     if (!pasteResult.ok) {
       this.lastClipboardText = text;
       return {
@@ -164,6 +177,74 @@ export class TextInsertionTransaction {
         status: 'failed',
         insertedText: this.insertedText,
         charsReplaced: charsToReplace,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  async replaceInsertedTailText(
+    replacementText: string,
+    charsToReplace: number,
+    currentTargetAppId: string | null,
+    options: { respectExternalClipboardChange?: boolean } = {}
+  ): Promise<TextInsertionReplaceResult> {
+    const insertedChars = Array.from(this.insertedText);
+    const safeCharsToReplace = Math.max(0, Math.min(Math.floor(charsToReplace), insertedChars.length));
+    if (!safeCharsToReplace) {
+      return {
+        status: 'no_inserted_text',
+        insertedText: this.insertedText,
+        charsReplaced: 0,
+      };
+    }
+
+    if (this.targetAppId && currentTargetAppId && this.targetAppId !== currentTargetAppId) {
+      return {
+        status: 'target_changed',
+        insertedText: this.insertedText,
+        charsReplaced: 0,
+      };
+    }
+
+    if (options.respectExternalClipboardChange !== false && this.lastClipboardText !== null) {
+      const currentClipboardText = clipboard.readText();
+      if (currentClipboardText !== this.lastClipboardText && currentClipboardText !== replacementText) {
+        return {
+          status: 'clipboard_changed',
+          insertedText: this.insertedText,
+          charsReplaced: 0,
+        };
+      }
+    }
+
+    try {
+      const replaceResult = await this.autoPaste.replaceRecentTextInApp(
+        this.targetAppId ?? currentTargetAppId,
+        replacementText,
+        safeCharsToReplace
+      );
+      if (!replaceResult.ok) {
+        return {
+          status: 'failed',
+          insertedText: this.insertedText,
+          charsReplaced: 0,
+          error: replaceResult.error ?? '自动替换失败。',
+        };
+      }
+
+      this.insertedText = `${insertedChars.slice(0, -safeCharsToReplace).join('')}${replacementText}`;
+      this.sourceText = this.insertedText;
+      this.lastClipboardText = replacementText;
+      return {
+        status: 'replaced',
+        insertedText: this.insertedText,
+        charsReplaced: safeCharsToReplace,
+      };
+    } catch (error) {
+      return {
+        status: 'failed',
+        insertedText: this.insertedText,
+        charsReplaced: safeCharsToReplace,
         error: error instanceof Error ? error.message : String(error),
       };
     }
