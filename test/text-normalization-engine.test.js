@@ -35,8 +35,30 @@ test("TextNormalizationEngine converts conservative date, time, money, percent a
   assert.equal(normalize("二零二六年六月十一日"), "2026年6月11日");
   assert.equal(normalize("零一五年三月八日"), "2015年3月8日");
   assert.equal(normalize("今天 ROI 是百分之三十"), "今天 ROI 是30%");
+  assert.equal(normalize("占比百分之七十六百分之百"), "占比76%、100%");
+  assert.equal(normalize("占比百分之76百分之100"), "占比76%、100%");
+  assert.equal(normalize("百分之七十六。百分之三。百分之五十九。"), "76%、3%、59%。");
+  assert.equal(normalize("准确率百分之九十九点五"), "准确率99.5%");
+  assert.equal(normalize("准确率百分之七十六。三。"), "准确率76.3%。");
+  assert.equal(normalize("占比百分之76。3。"), "占比76.3%。");
+  assert.equal(normalize("抽检比例千分之五"), "抽检比例5‰");
+  assert.equal(normalize("风险概率万分之三"), "风险概率3‱");
   assert.equal(normalize("预算是一万二千元"), "预算是12000元");
   assert.equal(normalize("这个版本是三点二点一"), "这个版本是3.2.1");
+});
+
+test("TextNormalizationEngine repairs percent-context punctuation mistakes", () => {
+  assert.equal(normalize("占比76。100。"), "占比76%、100%。");
+  assert.equal(normalize("完成率80 90"), "完成率80% 90%");
+  assert.equal(normalize("七十六。3。59."), "76%、3%、59%");
+  assert.equal(normalize("七十六。三。五十九。"), "76%、3%、59%");
+  assert.equal(normalize("76。3。"), "76.3%");
+  assert.equal(normalize("七十六。三。"), "76.3%");
+  assert.equal(normalize("76.3"), "76.3");
+  assert.equal(normalize("120。3。"), "120。3。");
+  assert.equal(normalize("一。二。三。"), "一。二。三。");
+  assert.equal(normalize("周一上午10点开会"), "周一上午10点开会");
+  assert.equal(normalize("预算是100元"), "预算是100元");
 });
 
 test("TextNormalizationEngine avoids idiom and incomplete streaming partial false positives", () => {

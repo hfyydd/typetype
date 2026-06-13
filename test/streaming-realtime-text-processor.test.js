@@ -74,6 +74,37 @@ test("StreamingRealtimeTextProcessor applies lightweight code-switch protection 
   assert.notEqual(result.tailCorrection, null);
 });
 
+test("StreamingRealtimeTextProcessor normalizes percent markers in streaming tail and final text", () => {
+  const processor = new StreamingRealtimeTextProcessor({
+    textNormalizationEngine: new TextNormalizationEngine(),
+    applyDictionary(text) {
+      return text;
+    },
+    applyCodeSwitch(text) {
+      return { text, matchedTerms: [], replacementCount: 0, highRiskCount: 0 };
+    },
+  });
+
+  const partial = processor.processPartial("占比百分之七十六。三。百分之百", createSettings(), {
+    stablePause: true,
+  });
+  const final = processor.processStableSegment("占比76。100。", createSettings(), {
+    final: true,
+  });
+  const droppedMarkerList = processor.processStableSegment("七十六。3。59.", createSettings(), {
+    final: true,
+  });
+  const droppedMarkerDecimal = processor.processStableSegment("76。3。", createSettings(), {
+    final: true,
+  });
+
+  assert.equal(partial.stableText.includes("76.3%"), true);
+  assert.equal(partial.stableText.includes("100%"), true);
+  assert.equal(final, "占比76%、100%。");
+  assert.equal(droppedMarkerList.includes("76%、3%、59%"), true);
+  assert.equal(droppedMarkerDecimal.includes("76.3%"), true);
+});
+
 test("StreamingRealtimeTextProcessor uses comma for stable pauses instead of mechanical periods", () => {
   const processor = new StreamingRealtimeTextProcessor({
     textNormalizationEngine: new TextNormalizationEngine(),

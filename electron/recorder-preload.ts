@@ -3,6 +3,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 interface RecorderAPI {
   onStart: (handler: (microphoneId?: string | null) => void | Promise<void>) => void;
   onStop: (handler: () => void | Promise<void>) => void;
+  onReset: (handler: (reason?: string) => void | Promise<void>) => void;
   sendStarted: () => void;
   sendWaveform: (waveform: number[]) => void;
   sendChunk: (samplesBuffer: ArrayBuffer) => void;
@@ -19,6 +20,11 @@ const api: RecorderAPI = {
   onStop: (handler) => {
     ipcRenderer.on('recorder_stop', () => {
       void handler();
+    });
+  },
+  onReset: (handler) => {
+    ipcRenderer.on('recorder_reset', (_event, payload?: { reason?: string }) => {
+      void handler(payload?.reason);
     });
   },
   sendStarted: () => {

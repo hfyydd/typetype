@@ -326,6 +326,19 @@ export interface AsrDiagnostics {
   vc_redist_version: string;
   vc_redist_installer_exists: boolean;
   vc_redist_install_log: string;
+  shortcut_health: string;
+  registered_shortcuts: string[];
+  last_shortcut_event_at: string;
+  last_shortcut_intent: string;
+  last_shortcut_repair_at: string;
+  recorder_pending_start: boolean;
+  recorder_pending_stop: boolean;
+  recorder_start_in_flight: boolean;
+  recorder_stop_in_flight: boolean;
+  runtime_status: string;
+  runtime_status_since: string;
+  last_non_streaming_timing: unknown;
+  last_non_streaming_refined_text_length: number;
 }
 
 export interface AsrHotwordStatus {

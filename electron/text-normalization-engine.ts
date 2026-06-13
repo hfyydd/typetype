@@ -33,7 +33,15 @@ const CN_DIGIT_VALUES = new Map<string, number>([
 
 const CN_NUMBER_RE = '[零〇○OＯ一二两三四五六七八九十百千万亿幺]';
 const CN_DIGIT_RE = '[零〇○OＯ一二两三四五六七八九幺]';
+const CN_PERCENT_VALUE_CHARS = new Set('零〇○OＯ一二两三四五六七八九十百千万亿幺点'.split(''));
 const WEEKDAY_RE = /(?:周|星期|礼拜)[一二三四五六日天]/g;
+const PERCENT_MARKERS = [
+  { marker: '百分之', suffix: '%' },
+  { marker: '千分之', suffix: '‰' },
+  { marker: '万分之', suffix: '‱' },
+];
+const PERCENT_CONTEXT_RE =
+  '(?:占比|比例|比率|百分比|增长率|完成率|准确率|正确率|错误率|通过率|合格率|达标率|转化率|留存率|覆盖率|达成率|利用率|出勤率|满意度|ROI|roi|同比|环比|利润率)';
 const IDIOMS_TO_PRESERVE = [
   '一心一意',
   '三三两两',
@@ -212,10 +220,209 @@ function normalizeTimes(text: string): string {
 }
 
 function normalizePercentages(text: string): string {
-  return text.replace(new RegExp(`百分之(${CN_NUMBER_RE}{1,8})`, 'gu'), (match, valueText: string) => {
-    const value = parseChineseInteger(valueText);
-    return value !== null ? `${value}%` : match;
-  });
+  let result = normalizeExplicitPercentMarkers(text);
+  result = normalizeContextualPercentNumbers(result);
+  result = normalizeStandalonePercentList(result);
+  result = normalizeStandalonePercentDecimal(result);
+  result = normalizePercentListSeparators(result);
+  result = result.replace(/(%|‰|‱)(?=\d)/gu, '$1、');
+  return result;
+}
+
+function normalizeExplicitPercentMarkers(text: string): string {
+  let result = '';
+  let index = 0;
+
+  while (index < text.length) {
+    const marker = PERCENT_MARKERS.find((item) => text.startsWith(item.marker, index));
+    if (!marker) {
+      result += text[index];
+      index += 1;
+      continue;
+    }
+
+    const valueStart = skipSpaces(text, index + marker.marker.length);
+    const parsed = parsePercentValueAt(text, valueStart);
+    if (!parsed) {
+      result += marker.marker;
+      index += marker.marker.length;
+      continue;
+    }
+
+    result += `${parsed.value}${marker.suffix}`;
+    index = parsed.end;
+  }
+
+  return result;
+}
+
+function normalizeContextualPercentNumbers(text: string): string {
+  const contextPattern = new RegExp(
+    `(${PERCENT_CONTEXT_RE})([是为达到达到了约大概左右\\s:：]*)(\\d{1,3}(?:\\.\\d+)?)(?![%‰‱\\d.年月日号点分元块人个])`,
+    'giu'
+  );
+  let result = text.replace(contextPattern, '$1$2$3%');
+
+  result = result.replace(
+    /([%‰‱])([。.]?\s*)(\d{1,3}(?:\.\d+)?)(?![%‰‱\d.年月日号点分元块人个])/gu,
+    (_match, suffix: string, separator: string, value: string) => {
+      const normalizedSeparator = /[。.]/u.test(separator) ? '、' : separator;
+      return `${suffix}${normalizedSeparator}${value}${suffix}`;
+    }
+  );
+
+  return result;
+}
+
+function normalizePercentListSeparators(text: string): string {
+  return text.replace(/([%‰‱])[。.]\s*(?=\d{1,3}(?:\.\d{1,2})?[%‰‱])/gu, '$1、');
+}
+
+function normalizeStandalonePercentList(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed || /[%‰‱百分千万]/u.test(trimmed)) {
+    return text;
+  }
+  if (!/^[\d零〇○OＯ一二两三四五六七八九十百幺\s。.,，、]+$/u.test(trimmed)) {
+    return text;
+  }
+
+  const tokens = trimmed
+    .split(/[\s。.,，、]+/u)
+    .map((token) => token.trim())
+    .filter(Boolean);
+  if (tokens.length < 3) {
+    return text;
+  }
+
+  const values = tokens.map(parseStandalonePercentListValue);
+  if (values.some((value) => value === null)) {
+    return text;
+  }
+
+  const numericValues = values as number[];
+  if (!numericValues.some((value) => value >= 10)) {
+    return text;
+  }
+
+  const normalized = numericValues.map((value) => `${formatNumber(value)}%`).join('、');
+  return text.replace(trimmed, normalized);
+}
+
+function normalizeStandalonePercentDecimal(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed || /[%‰‱百分千万]/u.test(trimmed)) {
+    return text;
+  }
+
+  const arabicMatch = trimmed.match(/^(\d{1,3})。(\d{1,2})[。.]?$/u);
+  if (arabicMatch) {
+    const integer = Number(arabicMatch[1]);
+    if (Number.isInteger(integer) && integer >= 0 && integer <= 100) {
+      return text.replace(trimmed, `${integer}.${arabicMatch[2]}%`);
+    }
+    return text;
+  }
+
+  const chineseMatch = trimmed.match(new RegExp(`^(${CN_NUMBER_RE}+)。(${CN_DIGIT_RE}{1,2})[。.]?$`, 'u'));
+  if (!chineseMatch) {
+    return text;
+  }
+
+  const value = parseChineseNumberLikePercent(`${chineseMatch[1]}点${chineseMatch[2]}`);
+  if (value === null) {
+    return text;
+  }
+  const numericValue = Number(value);
+  return numericValue >= 0 && numericValue <= 100 ? text.replace(trimmed, `${value}%`) : text;
+}
+
+function parseStandalonePercentListValue(token: string): number | null {
+  if (/^\d{1,3}(?:\.\d{1,2})?$/u.test(token)) {
+    const value = Number(token);
+    return value >= 0 && value <= 100 ? value : null;
+  }
+
+  if (!new RegExp(`^${CN_NUMBER_RE}+$`, 'u').test(token)) {
+    return null;
+  }
+  const value = parseChineseInteger(token);
+  return value !== null && value >= 0 && value <= 100 ? value : null;
+}
+
+function formatNumber(value: number): string {
+  return Number.isInteger(value) ? String(value) : String(value).replace(/0+$/u, '').replace(/\.$/u, '');
+}
+
+function skipSpaces(text: string, start: number): number {
+  let index = start;
+  while (index < text.length && /\s/u.test(text[index])) {
+    index += 1;
+  }
+  return index;
+}
+
+function parsePercentValueAt(text: string, start: number): { value: string; end: number } | null {
+  const arabicMatch = text.slice(start).match(/^(\d+)(?:[.。点](\d{1,2}))?/u);
+  if (arabicMatch) {
+    const value = arabicMatch[2] === undefined ? arabicMatch[1] : `${arabicMatch[1]}.${arabicMatch[2]}`;
+    return { value, end: start + arabicMatch[0].length };
+  }
+
+  let index = start;
+  let valueText = '';
+  let decimalSeen = false;
+  while (index < text.length) {
+    if (PERCENT_MARKERS.some((item) => text.startsWith(item.marker, index))) {
+      break;
+    }
+    const char = text[index];
+    if (char === '点' || char === '。') {
+      const nextChar = text[index + 1];
+      if (decimalSeen || !CN_DIGIT_VALUES.has(nextChar)) {
+        break;
+      }
+      valueText += '点';
+      decimalSeen = true;
+      index += 1;
+      continue;
+    }
+    if (!CN_PERCENT_VALUE_CHARS.has(char)) {
+      break;
+    }
+    valueText += char;
+    index += 1;
+  }
+
+  const value = parseChineseNumberLikePercent(valueText);
+  return value === null ? null : { value, end: index };
+}
+
+function parseChineseNumberLikePercent(value: string): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const parts = value.split('点');
+  if (parts.length > 2) {
+    return null;
+  }
+
+  const integer = parseChineseInteger(parts[0] || '零');
+  if (integer === null) {
+    return null;
+  }
+
+  if (parts.length === 1) {
+    return String(integer);
+  }
+
+  const decimalDigits = [...parts[1]].map((char) => CN_DIGIT_VALUES.get(char));
+  if (!decimalDigits.length || decimalDigits.some((digit) => digit === undefined)) {
+    return null;
+  }
+
+  return `${integer}.${decimalDigits.join('')}`;
 }
 
 function normalizeMoney(text: string): string {

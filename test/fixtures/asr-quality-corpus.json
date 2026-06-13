@@ -63,6 +63,36 @@
       "expected": "今天 ROI 是30%"
     },
     {
+      "category": "percent",
+      "mode": "streaming_final",
+      "input": "占比百分之七十六百分之百",
+      "expected": "占比76%、100%"
+    },
+    {
+      "category": "percent",
+      "mode": "streaming_final",
+      "input": "占比百分之七十六。三。",
+      "expected": "占比76.3%。"
+    },
+    {
+      "category": "percent",
+      "mode": "streaming_final",
+      "input": "七十六。3。59.",
+      "expected": "76%、3%、59%"
+    },
+    {
+      "category": "percent",
+      "mode": "streaming_final",
+      "input": "76。3。",
+      "expected": "76.3%"
+    },
+    {
+      "category": "percent",
+      "mode": "streaming_final",
+      "input": "占比76。100。",
+      "expected": "占比76%、100%。"
+    },
+    {
       "category": "money",
       "mode": "non_streaming",
       "input": "预算是一万二千元",

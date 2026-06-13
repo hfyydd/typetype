@@ -851,6 +851,9 @@ function formatAsrDiagnostics(report) {
     : report.hotwords_supported
       ? "支持但未启用"
       : "当前模式不支持底层热词";
+  const timing = report.last_non_streaming_timing && typeof report.last_non_streaming_timing === "object"
+    ? report.last_non_streaming_timing
+    : {};
   return [
     `结果: ${report.ok ? "通过" : "失败"}`,
     `模式: ${report.mode}`,
@@ -877,6 +880,21 @@ function formatAsrDiagnostics(report) {
     `VC++ 运行库版本: ${report.vc_redist_version || "未知"}`,
     `VC++ 安装器: ${report.vc_redist_installer_exists ? "已内置" : "缺失"}`,
     `VC++ 安装日志: ${report.vc_redist_install_log || "无"}`,
+    `快捷键健康: ${report.shortcut_health || "未知"}`,
+    `已注册快捷键: ${(report.registered_shortcuts || []).join(" / ") || "无"}`,
+    `最近快捷键触发: ${report.last_shortcut_event_at || "无"}`,
+    `最近快捷键意图: ${report.last_shortcut_intent || "无"}`,
+    `最近快捷键修复: ${report.last_shortcut_repair_at || "无"}`,
+    `录音启动等待中: ${report.recorder_pending_start ? "是" : "否"}`,
+    `录音停止等待中: ${report.recorder_pending_stop ? "是" : "否"}`,
+    `录音启动处理中: ${report.recorder_start_in_flight ? "是" : "否"}`,
+    `录音停止处理中: ${report.recorder_stop_in_flight ? "是" : "否"}`,
+    `当前运行状态: ${report.runtime_status || "未知"}`,
+    `运行状态开始时间: ${report.runtime_status_since || "未知"}`,
+    `最近非流式耗时: engine=${timing.engine_ready_ms ?? "-"}ms, asr=${timing.asr_ms ?? "-"}ms, cleanup=${timing.cleanup_ms ?? "-"}ms, quality=${timing.quality_ms ?? "-"}ms, output=${timing.output_ms ?? "-"}ms, total=${timing.total_ms ?? "-"}ms`,
+    `最近非流式断句: ${timing.punctuation_source || "无"}${timing.punctuation_timed_out ? "（超时降级）" : ""}`,
+    `LLM 是否阻塞首回填: ${timing.llm_blocked ? "是" : "否"}`,
+    `后台精修长度: ${report.last_non_streaming_refined_text_length || 0}`,
     `说明: ${report.message}`,
   ].join("\n");
 }
@@ -1186,6 +1204,19 @@ document.querySelector("#asr-diagnostics-button").addEventListener("click", asyn
     await refreshSettingsView();
   } catch (_) {
     setStatus("ASR 自检没有成功完成。已写入本地日志。", "error");
+  }
+});
+
+document.querySelector("#repair-shortcuts-button").addEventListener("click", async () => {
+  setStatus("正在修复快捷键和录音状态…");
+  try {
+    const result = await electronAPI.repairShortcutsAndRecorder();
+    setStatus(result.message, result.ok ? "default" : "error");
+    const report = await electronAPI.runAsrDiagnostics();
+    asrDiagnosticsOutput.value = formatAsrDiagnostics(report);
+    await refreshSettingsView();
+  } catch (error) {
+    setStatus(error?.message || "快捷键和录音状态修复失败。已写入本地日志。", "error");
   }
 });
 

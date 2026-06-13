@@ -24,6 +24,7 @@ export interface ElectronAPI {
   openFeedbackEmail: () => Promise<void>;
   runAsrDiagnostics: () => Promise<AsrDiagnostics>;
   installRuntimeDependency: () => Promise<{ ok: boolean; message: string; exit_code?: number; log_path?: string }>;
+  repairShortcutsAndRecorder: () => Promise<{ ok: boolean; message: string; shortcut_health: string; runtime_status: string; repaired: boolean }>;
   startRecording: () => Promise<void>;
   stopRecording: () => Promise<void>;
   testLlmConnection: (config: LlmRewriteConfig) => Promise<{ ok: boolean; latency_ms: number; error?: string }>;
@@ -63,6 +64,7 @@ const api: ElectronAPI = {
   openFeedbackEmail: () => ipcRenderer.invoke('open_feedback_email'),
   runAsrDiagnostics: () => ipcRenderer.invoke('run_asr_diagnostics'),
   installRuntimeDependency: () => ipcRenderer.invoke('install_runtime_dependency'),
+  repairShortcutsAndRecorder: () => ipcRenderer.invoke('repair_shortcuts_and_recorder'),
   startRecording: () => ipcRenderer.invoke('start_recording'),
   stopRecording: () => ipcRenderer.invoke('stop_recording'),
   testLlmConnection: (config: LlmRewriteConfig) => ipcRenderer.invoke('test_llm_connection', config),

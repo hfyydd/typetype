@@ -1,4 +1,4 @@
-export const THINKING_UI_LEAD_IN_MS = 120;
+export const THINKING_UI_LEAD_IN_MS = 0;
 
 export type TranscriptionTimer = ReturnType<typeof setTimeout>;
 

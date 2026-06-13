@@ -41,6 +41,7 @@ import {
   PreloadStatusView,
   StreamingAiPanelState,
   RewriteScenario,
+  RuntimeStatus,
 } from './types';
 import { getAvailableMicrophones } from './microphones';
 import { initializeAsrEngine } from './asr-bootstrap';
@@ -62,7 +63,7 @@ import { DictionaryStore } from './dictionary-store';
 import { createDictionaryImportPreview } from './dictionary-import';
 import { parseStreamingAiResult, sanitizeStreamingAiText } from './streaming-ai-text';
 import { buildLocalRewritePromptContext, LocalChineseRewriteResult, rewriteChineseLocally } from './local-chinese-rewrite';
-import { LocalPunctuationEngine } from './local-punctuation-engine';
+import { LocalPunctuationEngine, LocalPunctuationRestoreResult } from './local-punctuation-engine';
 import { RollingAudioCache } from './streaming-audio-cache';
 import { TextInsertionTransaction } from './text-insertion-transaction';
 import { CodeSwitchLexicon } from './code-switch-lexicon';
@@ -93,12 +94,38 @@ const STREAMING_PASTE_STARTUP_WINDOW_CHARS = 36;
 const STREAMING_PANEL_THROTTLE_MS = 100;
 const STREAMING_AUDIO_CACHE_SECONDS = 120;
 const STREAMING_TAIL_CORRECTION_MIN_INTERVAL_MS = 500;
+const SHORTCUT_WATCHDOG_INTERVAL_MS = 5000;
+const RECORDER_OPERATION_TIMEOUT_MS = 8000;
+const STOPPED_STALE_TIMEOUT_MS = 2000;
+const TRANSCRIPTION_STALE_TIMEOUT_MS = 90000;
+const NON_STREAMING_PUNCTUATION_TIMEOUT_MS = 260;
 
 interface StreamingCursorCommitState {
   committedText: string;
   committedSourceText: string;
   committedAt: number;
   sessionId: number;
+}
+
+interface NonStreamingTimingSnapshot {
+  run_id: number;
+  intent: CaptureIntent;
+  started_at: string;
+  samples: number;
+  engine_ready_ms?: number;
+  asr_ms?: number;
+  cleanup_ms?: number;
+  quality_ms?: number;
+  output_ms?: number;
+  total_ms?: number;
+  text_length?: number;
+  quality_text_length?: number;
+  punctuation_source?: 'model' | 'rules' | 'timeout';
+  punctuation_timed_out?: boolean;
+  llm_blocked: boolean;
+  background_refine_ms?: number;
+  background_refine_text_length?: number;
+  error?: string;
 }
 
 function defaultPreloadStatus(): PreloadStatusView {
@@ -142,6 +169,10 @@ class TypenewApp {
   private pendingRecorderResult:
     | { resolve: (samples: Float32Array) => void; reject: (error: Error) => void }
     | null = null;
+  private pendingRecorderStartAt = 0;
+  private pendingRecorderStopAt = 0;
+  private recordingStartInFlight = false;
+  private recordingStopInFlight = false;
   private recordingStopAllowedAt = 0;
   private streamingPastedText = '';
   private streamingPastedSourceText = '';
@@ -212,6 +243,13 @@ class TypenewApp {
   private runtimeDependencyPromptSuppressed = false;
   private runtimeDependencyPromptInFlight = false;
   private shortcutWatchdogTimer: ReturnType<typeof setInterval> | null = null;
+  private lastShortcutEventAt = 0;
+  private lastShortcutIntent: CaptureIntent | null = null;
+  private lastShortcutRepairAt = 0;
+  private lastRuntimeStatus: RuntimeStatus = 'idle';
+  private runtimeStatusSince = Date.now();
+  private lastNonStreamingTiming: NonStreamingTimingSnapshot | null = null;
+  private lastNonStreamingRefinedText = '';
 
   constructor() {
     this.settingsStore = new SettingsStore();
@@ -432,10 +470,12 @@ class TypenewApp {
     });
 
     powerMonitor.on('resume', () => {
+      this.recoverShortcutAndRecorderIfNeeded('system-resume', true);
       this.repairShortcutsIfNeeded('system-resume');
     });
 
     powerMonitor.on('unlock-screen', () => {
+      this.recoverShortcutAndRecorderIfNeeded('screen-unlock', true);
       this.repairShortcutsIfNeeded('screen-unlock');
     });
   }
@@ -470,6 +510,7 @@ class TypenewApp {
       () => this.openFeedbackEmail(),
       () => this.runAsrDiagnostics(),
       () => this.installRuntimeDependency(),
+      () => this.repairShortcutsAndRecorder(),
       () => this.startRecording(),
       () => this.stopRecording(),
       (config) => testLlmConnection(config),
@@ -989,12 +1030,41 @@ class TypenewApp {
   }
 
   private handleShortcutToggle(intent: CaptureIntent): void {
-    const status = this.stateMachine.getStatus();
     const now = Date.now();
+    this.lastShortcutEventAt = now;
+    this.lastShortcutIntent = intent;
+    this.recoverShortcutAndRecorderIfNeeded('shortcut-toggle');
+
+    if (this.recordingStartInFlight || this.pendingRecorderStart) {
+      console.warn('Ignoring shortcut while recorder start is still pending', {
+        intent,
+        pending_recorder_start: Boolean(this.pendingRecorderStart),
+      });
+      return;
+    }
+
+    if (this.recordingStopInFlight || this.pendingRecorderResult) {
+      console.warn('Ignoring shortcut while recorder stop is still pending', {
+        intent,
+        pending_recorder_stop: Boolean(this.pendingRecorderResult),
+      });
+      return;
+    }
+
+    const status = this.stateMachine.getStatus();
 
     if (status === 'idle' || status === 'done') {
       void this.startRecording(intent).catch((error) => {
         console.error('Failed to start recording:', error);
+      });
+    } else if (status === 'stopped') {
+      this.stateMachine.dismissOverlay();
+      this.noteRuntimeStatus('idle');
+      this.hideOverlayWindow();
+      this.updateTrayAnimation();
+      this.publishSnapshot();
+      void this.startRecording(intent).catch((error) => {
+        console.error('Failed to start recording after stopped-state recovery:', error);
       });
     } else if (status === 'recording' && canStopRecording(now, this.recordingStopAllowedAt)) {
       this.applyStopIntent(intent);
@@ -1077,17 +1147,18 @@ class TypenewApp {
     }
 
     this.shortcutWatchdogTimer = setInterval(() => {
+      this.recoverShortcutAndRecorderIfNeeded('watchdog');
       this.repairShortcutsIfNeeded('watchdog');
-    }, 15000);
+    }, SHORTCUT_WATCHDOG_INTERVAL_MS);
   }
 
-  private repairShortcutsIfNeeded(reason: string): void {
+  private repairShortcutsIfNeeded(reason: string, force = false): void {
     if (this.isQuitting) {
       return;
     }
 
     const health = this.shortcutManager.getRegistrationHealth();
-    if (health.ok) {
+    if (health.ok && !force) {
       return;
     }
 
@@ -1098,9 +1169,112 @@ class TypenewApp {
 
     try {
       this.registerShortcutsForSettings(this.settingsStore.getSettings(), reason);
+      this.lastShortcutRepairAt = Date.now();
       this.publishSettingsViewData();
     } catch (error) {
       console.error('Failed to repair global shortcuts:', error);
+    }
+  }
+
+  private noteRuntimeStatus(status: RuntimeStatus = this.stateMachine.getStatus()): void {
+    if (status === this.lastRuntimeStatus) {
+      return;
+    }
+    this.lastRuntimeStatus = status;
+    this.runtimeStatusSince = Date.now();
+  }
+
+  private recoverShortcutAndRecorderIfNeeded(reason: string, force = false): boolean {
+    if (this.isQuitting) {
+      return false;
+    }
+
+    const now = Date.now();
+    const status = this.stateMachine.getStatus();
+    this.noteRuntimeStatus(status);
+    const staleReasons: string[] = [];
+
+    if (this.pendingRecorderStart && now - this.pendingRecorderStartAt > RECORDER_OPERATION_TIMEOUT_MS) {
+      staleReasons.push('recorder_start_timeout');
+    }
+    if (this.pendingRecorderResult && now - this.pendingRecorderStopAt > RECORDER_OPERATION_TIMEOUT_MS) {
+      staleReasons.push('recorder_stop_timeout');
+    }
+    if (status === 'stopped' && now - this.runtimeStatusSince > STOPPED_STALE_TIMEOUT_MS) {
+      staleReasons.push('stopped_state_stale');
+    }
+    if (
+      (status === 'transcribing' || status === 'translating' || status === 'polishing')
+      && now - this.runtimeStatusSince > TRANSCRIPTION_STALE_TIMEOUT_MS
+    ) {
+      staleReasons.push(`${status}_state_stale`);
+    }
+
+    if (!force && staleReasons.length === 0) {
+      return false;
+    }
+
+    console.warn('Repairing shortcut and recorder runtime state', {
+      reason,
+      force,
+      stale_reasons: staleReasons,
+      status,
+      pending_recorder_start: Boolean(this.pendingRecorderStart),
+      pending_recorder_stop: Boolean(this.pendingRecorderResult),
+      recording_start_in_flight: this.recordingStartInFlight,
+      recording_stop_in_flight: this.recordingStopInFlight,
+    });
+
+    this.resetRecorderRenderer(`shortcut-repair:${reason}`);
+    this.clearPendingRecorderOperation(`Shortcut repair: ${reason}`);
+    this.recordingStartInFlight = false;
+    this.recordingStopInFlight = false;
+    this.clearPendingTranscriptionTimer();
+    this.clearStopOverlayTimer();
+    this.asrEngine?.cancelStreamingSession();
+    if (this.shouldUseStreamingForActiveCapture()) {
+      this.cancelStreamingOutputSession(`shortcut-repair:${reason}`);
+    }
+    if (this.audioRecorder?.isActive()) {
+      try {
+        this.audioRecorder.stop();
+      } catch (error) {
+        console.warn('Failed to stop native recorder during shortcut repair:', error);
+      }
+    }
+    this.audioRecorder = null;
+    this.stateMachine.dismissOverlay();
+    this.noteRuntimeStatus('idle');
+    this.hideOverlayWindow();
+    this.updateTrayAnimation();
+    this.publishSnapshot();
+    this.repairShortcutsIfNeeded(reason, true);
+    return true;
+  }
+
+  private clearPendingRecorderOperation(message: string): void {
+    const error = new Error(message);
+    if (this.pendingRecorderStart) {
+      this.pendingRecorderStart.reject(error);
+      this.pendingRecorderStart = null;
+    }
+    if (this.pendingRecorderResult) {
+      this.pendingRecorderResult.reject(error);
+      this.pendingRecorderResult = null;
+    }
+    this.pendingRecorderStartAt = 0;
+    this.pendingRecorderStopAt = 0;
+  }
+
+  private resetRecorderRenderer(reason: string): void {
+    if (process.platform !== 'win32') {
+      return;
+    }
+
+    try {
+      this.recorderWindow?.webContents.send('recorder_reset', { reason });
+    } catch (error) {
+      console.warn('Failed to send recorder reset:', error);
     }
   }
 
@@ -1486,6 +1660,25 @@ class TypenewApp {
     }
   }
 
+  private formatDiagnosticsTime(timestamp: number): string {
+    return timestamp > 0 ? new Date(timestamp).toISOString() : '';
+  }
+
+  private getRegisteredShortcutLabels(): string[] {
+    return [
+      `dictation:${this.shortcutManager.getCurrentHotkey('dictation') || '未注册'}`,
+      `translation:${this.shortcutManager.getCurrentHotkey('translation') || '未注册'}`,
+    ];
+  }
+
+  private getShortcutHealthLabel(): string {
+    const health = this.shortcutManager.getRegistrationHealth();
+    if (health.ok) {
+      return '正常';
+    }
+    return `需要修复: ${health.missing.join(', ') || '未知快捷键'}`;
+  }
+
   private async runAsrDiagnostics(): Promise<AsrDiagnostics> {
     const settings = this.settingsStore.getSettings();
     const mode = settings.recognition_mode === 'streaming_output'
@@ -1523,6 +1716,19 @@ class TypenewApp {
       vc_redist_version: runtimeDependencyStatus.vc_redist_version,
       vc_redist_installer_exists: runtimeDependencyStatus.vc_redist_installer_exists,
       vc_redist_install_log: runtimeDependencyStatus.vc_redist_install_log,
+      shortcut_health: this.getShortcutHealthLabel(),
+      registered_shortcuts: this.getRegisteredShortcutLabels(),
+      last_shortcut_event_at: this.formatDiagnosticsTime(this.lastShortcutEventAt),
+      last_shortcut_intent: this.lastShortcutIntent ?? '',
+      last_shortcut_repair_at: this.formatDiagnosticsTime(this.lastShortcutRepairAt),
+      recorder_pending_start: Boolean(this.pendingRecorderStart),
+      recorder_pending_stop: Boolean(this.pendingRecorderResult),
+      recorder_start_in_flight: this.recordingStartInFlight,
+      recorder_stop_in_flight: this.recordingStopInFlight,
+      runtime_status: this.stateMachine.getStatus(),
+      runtime_status_since: this.formatDiagnosticsTime(this.runtimeStatusSince),
+      last_non_streaming_timing: this.lastNonStreamingTiming ?? {},
+      last_non_streaming_refined_text_length: this.lastNonStreamingRefinedText.length,
     };
 
     try {
@@ -1601,6 +1807,28 @@ class TypenewApp {
     return result;
   }
 
+  private async repairShortcutsAndRecorder(): Promise<{
+    ok: boolean;
+    message: string;
+    shortcut_health: string;
+    runtime_status: RuntimeStatus;
+    repaired: boolean;
+  }> {
+    const repaired = this.recoverShortcutAndRecorderIfNeeded('manual-repair', true);
+    this.repairShortcutsIfNeeded('manual-repair', true);
+    const health = this.shortcutManager.getRegistrationHealth();
+    this.publishSettingsViewData();
+    return {
+      ok: health.ok,
+      message: health.ok
+        ? '快捷键和录音状态已修复，可以重新按快捷键开始录音。'
+        : `快捷键仍未完全恢复：${health.missing.join(', ')}`,
+      shortcut_health: this.getShortcutHealthLabel(),
+      runtime_status: this.stateMachine.getStatus(),
+      repaired,
+    };
+  }
+
   private async captureOutputTarget(): Promise<string | null> {
     try {
       const target = await this.autoPaste.captureFrontmostApp();
@@ -1636,14 +1864,26 @@ class TypenewApp {
   }
 
   private async startRecording(intent: CaptureIntent = 'dictation'): Promise<void> {
+    if (this.recordingStartInFlight || this.pendingRecorderStart || this.recordingStopInFlight || this.pendingRecorderResult) {
+      console.warn('Start recording ignored because recorder operation is already pending', {
+        intent,
+        recording_start_in_flight: this.recordingStartInFlight,
+        recording_stop_in_flight: this.recordingStopInFlight,
+        pending_recorder_start: Boolean(this.pendingRecorderStart),
+        pending_recorder_stop: Boolean(this.pendingRecorderResult),
+      });
+      return;
+    }
+
     if (!this.stateMachine.shouldStartRecording()) {
       return;
     }
 
+    this.recordingStartInFlight = true;
     this.activeCaptureIntent = intent;
-    this.previousAppBundleId = await this.captureOutputTarget();
 
     try {
+      this.previousAppBundleId = await this.captureOutputTarget();
       const settings = this.settingsStore.getSettings();
       this.streamingSessionId += 1;
       this.streamingChunkLogCount = 0;
@@ -1693,12 +1933,7 @@ class TypenewApp {
 
       if (process.platform === 'win32') {
         await recorderReadyPromise;
-        await new Promise<void>((resolve, reject) => {
-          this.pendingRecorderStart = { resolve, reject };
-          this.recorderWindow?.webContents.send('recorder_start', {
-            microphoneId: settings.microphone_id,
-          });
-        });
+        await this.requestWindowsRecorderStart(settings);
       } else {
         const recordingsDir = path.join(this.getDataDir(), 'recordings');
         this.audioRecorder = new AudioRecorder(
@@ -1716,7 +1951,14 @@ class TypenewApp {
       }
     } catch (e) {
       console.error('Failed to start recording:', e);
+      this.resetRecorderRenderer('start-recording-failed');
+      this.clearPendingRecorderOperation('Start recording failed');
+      this.stateMachine.dismissOverlay();
+      this.updateTrayAnimation();
+      this.publishSnapshot();
       return;
+    } finally {
+      this.recordingStartInFlight = false;
     }
 
     this.stateMachine.startRecording();
@@ -1732,23 +1974,40 @@ class TypenewApp {
   }
 
   private async stopRecording(): Promise<void> {
+    if (this.recordingStopInFlight || this.pendingRecorderResult) {
+      console.warn('Stop recording ignored because recorder stop is already pending', {
+        pending_recorder_stop: Boolean(this.pendingRecorderResult),
+      });
+      return;
+    }
+
+    this.recordingStopInFlight = true;
     if (process.platform === 'win32') {
-      await this.stopWindowsRecording();
+      try {
+        await this.stopWindowsRecording();
+      } finally {
+        this.recordingStopInFlight = false;
+      }
       return;
     }
 
     if (!this.audioRecorder || !this.audioRecorder.isActive()) {
+      this.recordingStopInFlight = false;
       return;
     }
 
-    const audioChunk = this.audioRecorder.stop();
-    this.audioRecorder = null;
-    if (this.shouldUseStreamingForActiveCapture()) {
-      await this.finishStreamingOutput();
-      return;
-    }
+    try {
+      const audioChunk = this.audioRecorder.stop();
+      this.audioRecorder = null;
+      if (this.shouldUseStreamingForActiveCapture()) {
+        await this.finishStreamingOutput();
+        return;
+      }
 
-    this.beginTranscribing(audioChunk.samples);
+      this.beginTranscribing(audioChunk.samples);
+    } finally {
+      this.recordingStopInFlight = false;
+    }
   }
 
   private async stopWindowsRecording(): Promise<void> {
@@ -1764,10 +2023,7 @@ class TypenewApp {
       this.publishSnapshot();
     }
 
-    const samples = await new Promise<Float32Array>((resolve, reject) => {
-      this.pendingRecorderResult = { resolve, reject };
-      this.recorderWindow?.webContents.send('recorder_stop');
-    }).catch((error) => {
+    const samples = await this.requestWindowsRecorderStop().catch((error) => {
       console.error('Windows recorder stop failed:', error);
       this.hideOverlayWindow();
       this.stateMachine.dismissOverlay();
@@ -1788,6 +2044,64 @@ class TypenewApp {
     this.beginTranscribing(samples);
   }
 
+  private requestWindowsRecorderStart(settings: Settings): Promise<void> {
+    return new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        if (this.pendingRecorderStart) {
+          this.resetRecorderRenderer('recorder-start-timeout');
+          this.pendingRecorderStart.reject(new Error('Windows recorder_start timed out'));
+          this.pendingRecorderStart = null;
+        }
+        this.pendingRecorderStartAt = 0;
+      }, RECORDER_OPERATION_TIMEOUT_MS);
+
+      this.pendingRecorderStartAt = Date.now();
+      this.pendingRecorderStart = {
+        resolve: () => {
+          clearTimeout(timeout);
+          this.pendingRecorderStartAt = 0;
+          resolve();
+        },
+        reject: (error: Error) => {
+          clearTimeout(timeout);
+          this.pendingRecorderStartAt = 0;
+          reject(error);
+        },
+      };
+      this.recorderWindow?.webContents.send('recorder_start', {
+        microphoneId: settings.microphone_id,
+      });
+    });
+  }
+
+  private requestWindowsRecorderStop(): Promise<Float32Array> {
+    return new Promise<Float32Array>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        if (this.pendingRecorderResult) {
+          this.resetRecorderRenderer('recorder-stop-timeout');
+          this.pendingRecorderResult.reject(new Error('Windows recorder_stop timed out'));
+          this.pendingRecorderResult = null;
+        }
+        this.pendingRecorderStopAt = 0;
+      }, RECORDER_OPERATION_TIMEOUT_MS);
+
+      this.pendingRecorderStopAt = Date.now();
+      this.pendingRecorderResult = {
+        resolve: (samples: Float32Array) => {
+          clearTimeout(timeout);
+          this.pendingRecorderStopAt = 0;
+          resolve(samples);
+        },
+        reject: (error: Error) => {
+          clearTimeout(timeout);
+          this.pendingRecorderStopAt = 0;
+          reject(error);
+        },
+      };
+      this.recorderWindow?.webContents.send('recorder_stop');
+    });
+  }
+
   private beginTranscribing(samples: Float32Array): void {
     this.clearPendingTranscriptionTimer();
     this.clearStopOverlayTimer();
@@ -1797,9 +2111,10 @@ class TypenewApp {
     this.publishSnapshot();
 
     const runId = ++this.transcriptionRunId;
+    const queuedAt = Date.now();
     this.pendingTranscriptionTimer = scheduleTranscriptionStart(() => {
       this.pendingTranscriptionTimer = null;
-      void this.transcribeAudio(samples, runId);
+      void this.transcribeAudio(samples, runId, queuedAt);
     });
   }
 
@@ -1835,7 +2150,15 @@ class TypenewApp {
     return this.transcriptionRunId === runId;
   }
 
-  private async transcribeAudio(samples: Float32Array, runId: number): Promise<void> {
+  private async transcribeAudio(samples: Float32Array, runId: number, queuedAt = Date.now()): Promise<void> {
+    const timing: NonStreamingTimingSnapshot = {
+      run_id: runId,
+      intent: this.activeCaptureIntent,
+      started_at: new Date(queuedAt).toISOString(),
+      samples: samples.length,
+      llm_blocked: false,
+    };
+    const totalStartedAt = Date.now();
     if (samples.length === 0) {
       this.hideOverlayWindow();
       this.stateMachine.dismissOverlay();
@@ -1845,7 +2168,9 @@ class TypenewApp {
     }
 
     try {
+      const engineReadyStartedAt = Date.now();
       const engine = await this.getAsrEngineForTranscription();
+      timing.engine_ready_ms = Date.now() - engineReadyStartedAt;
       if (!this.isCurrentTranscriptionRun(runId)) {
         return;
       }
@@ -1855,7 +2180,9 @@ class TypenewApp {
         throw new Error('ASR engine not initialized');
       }
 
+      const asrStartedAt = Date.now();
       const asrResult = await engine.transcribeRich(samples);
+      timing.asr_ms = Date.now() - asrStartedAt;
       const text = asrResult.text;
 
       if (!this.isCurrentTranscriptionRun(runId)) {
@@ -1871,7 +2198,9 @@ class TypenewApp {
       }
 
       const settings = this.settingsStore.getSettings();
+      const cleanupStartedAt = Date.now();
       const cleanedTranscript = this.cleanupTranscriptWithDictionary(text, settings);
+      timing.cleanup_ms = Date.now() - cleanupStartedAt;
       if (!cleanedTranscript) {
         this.hideOverlayWindow();
         this.stateMachine.dismissOverlay();
@@ -1891,7 +2220,12 @@ class TypenewApp {
       if (this.activeCaptureIntent === 'translation') {
         finalText = await this.translateTranscript(cleanedTranscript);
       } else {
-        const localFallback = await this.buildModelAssistedLocalChineseRewrite(cleanedTranscript, settings, true);
+        const qualityStartedAt = Date.now();
+        const qualityResult = await this.buildFastNonStreamingQualityText(cleanedTranscript, settings);
+        timing.quality_ms = Date.now() - qualityStartedAt;
+        timing.punctuation_source = qualityResult.source;
+        timing.punctuation_timed_out = qualityResult.timedOut;
+        timing.quality_text_length = qualityResult.qualityText.length;
         const gateDecision = this.aiRewriteGate.decide({
           text: cleanedTranscript,
           settings,
@@ -1902,15 +2236,20 @@ class TypenewApp {
           should_run: gateDecision.shouldRun,
           reasons: gateDecision.reasons,
           text_length: cleanedTranscript.length,
+          default_output_waits_for_llm: false,
         });
-        const aiRewrite = gateDecision.shouldRun
-          ? await this.rewriteWithLlm(cleanedTranscript)
-          : null;
-        finalText = aiRewrite
-          || localFallback.rewrite.refinedRawText
+        finalText = qualityResult.qualityText
           || this.applyFallbackPunctuation(cleanedTranscript, settings);
         finalText = this.stateMachine.finishOutput(finalText);
+        this.runNonStreamingBackgroundRefineIfNeeded(
+          cleanedTranscript,
+          finalText,
+          settings,
+          runId,
+          gateDecision.shouldRun
+        );
       }
+      timing.text_length = finalText.length;
       this.autoLearnFromTranscript(`${cleanedTranscript}\n${finalText}`, settings);
       console.log('[translation-debug] final-output-ready', {
         intent: this.activeCaptureIntent,
@@ -1918,7 +2257,12 @@ class TypenewApp {
       });
       console.log('Transcription complete', createTranscriptionLogMeta(finalText));
 
+      const outputStartedAt = Date.now();
       await this.outputTranscript(finalText, settings.auto_paste);
+      timing.output_ms = Date.now() - outputStartedAt;
+      timing.total_ms = Date.now() - totalStartedAt;
+      this.lastNonStreamingTiming = timing;
+      this.publishSettingsViewData();
       this.publishSnapshot();
 
       // Dismiss overlay after delay
@@ -1934,6 +2278,10 @@ class TypenewApp {
       }
 
       console.error('Transcription error:', e);
+      timing.error = e instanceof Error ? e.message : String(e);
+      timing.total_ms = Date.now() - totalStartedAt;
+      this.lastNonStreamingTiming = timing;
+      this.publishSettingsViewData();
       this.hideOverlayWindow();
       this.stateMachine.dismissOverlay();
       this.updateTrayAnimation();
@@ -2212,6 +2560,144 @@ class TypenewApp {
     };
   }
 
+  private async buildFastNonStreamingQualityText(
+    text: string,
+    settings: Settings
+  ): Promise<{
+    qualityText: string;
+    source: 'model' | 'rules' | 'timeout';
+    timedOut: boolean;
+    rewrite: LocalChineseRewriteResult;
+  }> {
+    const cleanText = this.normalizeTranscriptText(stripUnknownTokens(text), settings);
+    const fallbackRewrite = this.buildLocalChineseRewrite(cleanText, settings, true);
+    const punctuationResult = await this.restoreSemanticPunctuationWithBudget(
+      cleanText,
+      fallbackRewrite.preserveTerms
+    );
+
+    if (punctuationResult.result?.text.trim()) {
+      const punctuationText = stripUnknownTokens(punctuationResult.result.text);
+      const rewrite = rewriteChineseLocally({
+        rawText: punctuationText,
+        scenario: settings.rewrite_scenario,
+        preserveTerms: fallbackRewrite.preserveTerms,
+        final: true,
+      });
+      const refinedRawText = this.normalizeTranscriptText(
+        sanitizeStreamingAiText(rewrite.refinedRawText)
+          || sanitizeStreamingAiText(punctuationText)
+          || fallbackRewrite.refinedRawText
+          || this.applyFallbackPunctuation(cleanText, settings),
+        settings
+      );
+      return {
+        qualityText: refinedRawText,
+        source: punctuationResult.timedOut ? 'timeout' : punctuationResult.result.source,
+        timedOut: punctuationResult.timedOut,
+        rewrite: {
+          ...rewrite,
+          refinedRawText,
+          preserveTerms: fallbackRewrite.preserveTerms,
+        },
+      };
+    }
+
+    const fallbackText = fallbackRewrite.refinedRawText || this.applyFallbackPunctuation(cleanText, settings);
+    return {
+      qualityText: this.normalizeTranscriptText(fallbackText, settings),
+      source: punctuationResult.timedOut ? 'timeout' : 'rules',
+      timedOut: punctuationResult.timedOut,
+      rewrite: fallbackRewrite,
+    };
+  }
+
+  private async restoreSemanticPunctuationWithBudget(
+    cleanText: string,
+    preserveTerms: string[]
+  ): Promise<{ result: LocalPunctuationRestoreResult | null; timedOut: boolean }> {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const punctuationPromise = this.semanticPunctuationEngine.restorePunctuation(cleanText, {
+      final: true,
+      preserveTerms,
+    });
+    punctuationPromise.catch((error) => {
+      console.warn('Non-streaming punctuation finished with an error after fallback:', error);
+    });
+
+    try {
+      const result = await Promise.race<LocalPunctuationRestoreResult | 'timeout'>([
+        punctuationPromise,
+        new Promise<'timeout'>((resolve) => {
+          timer = setTimeout(() => resolve('timeout'), NON_STREAMING_PUNCTUATION_TIMEOUT_MS);
+        }),
+      ]);
+      if (timer) {
+        clearTimeout(timer);
+      }
+      if (result === 'timeout') {
+        return { result: null, timedOut: true };
+      }
+      return { result, timedOut: false };
+    } catch (error) {
+      if (timer) {
+        clearTimeout(timer);
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        result: {
+          text: applyBasicTranscriptPunctuation(cleanText),
+          sentences: [],
+          source: 'rules',
+          ready: false,
+          error: message,
+        },
+        timedOut: false,
+      };
+    }
+  }
+
+  private runNonStreamingBackgroundRefineIfNeeded(
+    cleanText: string,
+    qualityText: string,
+    settings: Settings,
+    runId: number,
+    shouldRun: boolean
+  ): void {
+    if (!settings.llm_rewrite?.enabled || !shouldRun) {
+      return;
+    }
+
+    const startedAt = Date.now();
+    void this.rewriteWithLlm(cleanText, { background: true })
+      .then((refinedText) => {
+        if (!this.isCurrentTranscriptionRun(runId) || !refinedText || refinedText === qualityText) {
+          return;
+        }
+        this.lastNonStreamingRefinedText = refinedText;
+        this.lastNonStreamingTiming = {
+          ...(this.lastNonStreamingTiming ?? {
+            run_id: runId,
+            intent: this.activeCaptureIntent,
+            started_at: new Date(startedAt).toISOString(),
+            samples: 0,
+            llm_blocked: false,
+          }),
+          background_refine_ms: Date.now() - startedAt,
+          background_refine_text_length: refinedText.length,
+        };
+        this.publishSettingsViewData();
+        console.log('Non-streaming background refine completed without auto-overwrite', {
+          run_id: runId,
+          text_length: refinedText.length,
+          elapsed_ms: Date.now() - startedAt,
+        });
+      })
+      .catch((error) => {
+        console.warn('Non-streaming background refine failed:', error);
+      });
+  }
+
   private getPunctuationFallbackStatusText(error: string): string {
     if (error) {
       void this.maybePromptRuntimeDependencyRepair(error);
@@ -2373,7 +2859,10 @@ class TypenewApp {
     }
   }
 
-  private async rewriteWithLlm(text: string): Promise<string | null> {
+  private async rewriteWithLlm(
+    text: string,
+    options: { background?: boolean } = {}
+  ): Promise<string | null> {
     const settings = this.settingsStore.getSettings();
     const cleanText = this.normalizeTranscriptText(stripUnknownTokens(text), settings);
 
@@ -2381,9 +2870,11 @@ class TypenewApp {
       return null;
     }
 
-    this.stateMachine.beginPolishing();
-    this.updateTrayAnimation();
-    this.publishSnapshot();
+    if (!options.background) {
+      this.stateMachine.beginPolishing();
+      this.updateTrayAnimation();
+      this.publishSnapshot();
+    }
 
     const localRewriteResult = await this.buildModelAssistedLocalChineseRewrite(cleanText, settings, true);
     const localRewrite = localRewriteResult.rewrite;
@@ -3414,6 +3905,7 @@ class TypenewApp {
   }
 
   private publishSnapshot(snapshot: UiSnapshot = this.stateMachine.snapshot()): void {
+    this.noteRuntimeStatus(snapshot.status as RuntimeStatus);
     const overlayContents = this.overlayWindow?.getWindow()?.webContents;
     if (!overlayContents || overlayContents.isDestroyed()) {
       return;

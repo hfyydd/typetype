@@ -18,6 +18,7 @@ let captureModulePromise = null;
 let chunkFlushTimer = null;
 let workletBlobUrl = null;
 let lastAudioContextState = null;
+let startInFlight = false;
 
 const PCM_CHUNK_FLUSH_MS = 180;
 
@@ -57,6 +58,7 @@ function stopChunkFlushLoop() {
 }
 
 function cleanupStream() {
+  startInFlight = false;
   stopWaveformLoop();
   stopChunkFlushLoop();
 
@@ -188,10 +190,16 @@ async function createCaptureNode(context) {
 
 async function startRecording(microphoneId = null) {
   if (mediaStream) {
+    recorderAPI.sendStarted();
+    return;
+  }
+
+  if (startInFlight) {
     return;
   }
 
   try {
+    startInFlight = true;
     const context = await ensureAudioContext();
     mediaStream = await navigator.mediaDevices.getUserMedia({
       audio: buildAudioConstraints(microphoneId),
@@ -228,6 +236,7 @@ async function startRecording(microphoneId = null) {
     // Wait for audio processing to actually produce samples before signaling ready
     // This ensures WebAudio pipeline is fully operational
     await waitForAudioProcessing(context);
+    startInFlight = false;
     recorderAPI.sendStarted();
   } catch (error) {
     cleanupStream();
@@ -289,3 +298,7 @@ async function stopRecording() {
 
 recorderAPI.onStart(startRecording);
 recorderAPI.onStop(stopRecording);
+recorderAPI.onReset((reason) => {
+  console.warn("Recorder reset requested", reason || "");
+  cleanupStream();
+});
