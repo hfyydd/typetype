@@ -12,8 +12,8 @@
     "build": "npm run build:electron && npm install sherpa-onnx-darwin-arm64 sherpa-onnx-darwin-x64 --no-save --force && electron-builder --mac",
     "build:mac": "npm run build:electron && npm install sherpa-onnx-darwin-arm64 sherpa-onnx-darwin-x64 --no-save --force && electron-builder --mac",
     "build:win": "npm run build:electron && npm install sherpa-onnx-win-x64 --no-save --force && electron-builder --win --x64",
-    "build:mac-arm64": "npm run build:electron && npm install sherpa-onnx-darwin-arm64 --no-save --force && electron-builder --mac --arm64",
-    "build:mac-x64": "npm run build:electron && npm install sherpa-onnx-darwin-x64 --no-save --force && electron-builder --mac --x64",
+    "build:mac-arm64": "npm run build:electron && npm install sherpa-onnx-darwin-arm64 --no-save --force && node -e \"require('fs').rmSync('node_modules/sherpa-onnx-darwin-x64',{recursive:true,force:true})\" && electron-builder --mac --arm64",
+    "build:mac-x64": "npm run build:electron && npm install sherpa-onnx-darwin-x64 --no-save --force && node -e \"require('fs').rmSync('node_modules/sherpa-onnx-darwin-arm64',{recursive:true,force:true})\" && electron-builder --mac --x64",
     "build:mac-both": "npm run build:electron && npm install sherpa-onnx-darwin-arm64 --no-save --force && electron-builder --mac --arm64 && npm run build:electron && npm install sherpa-onnx-darwin-x64 --no-save --force && electron-builder --mac --x64"
   },
   "dependencies": {
@@ -101,6 +101,9 @@
         "zip"
       ],
       "icon": "resources/icon.icns",
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "sign": "scripts/mac-adhoc-sign.cjs",
       "extendInfo": {
         "NSMicrophoneUsageDescription": "\u6b64\u5e94\u7528\u9700\u8981\u8bbf\u95ee\u60a8\u7684\u9ea6\u514b\u98ce\u4ee5\u5f55\u5236\u8bed\u97f3\u8fdb\u884c\u79bb\u7ebf\u542c\u5199\u8f93\u5165\u3002"
       }

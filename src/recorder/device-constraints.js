@@ -1,13 +1,13 @@
 export function buildAudioConstraints(microphoneId) {
   const constraints = {
-    channelCount: 1,
-    echoCancellation: false,
-    noiseSuppression: false,
-    autoGainControl: false,
+    channelCount: { ideal: 1 },
+    echoCancellation: { ideal: false },
+    noiseSuppression: { ideal: false },
+    autoGainControl: { ideal: false },
   };
 
   if (microphoneId) {
-    constraints.deviceId = { exact: microphoneId };
+    constraints.deviceId = { ideal: microphoneId };
   }
 
   return constraints;

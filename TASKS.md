@@ -1599,3 +1599,59 @@ new regression.
 - Packaged Intel (x64) DMG: `release/typetype-0.3.19.dmg`
 - Overrode target to build only DMG.
 - Copied to user's Desktop as: `/Users/hanfeng/Desktop/typetype-0.3.19-x64.dmg`
+
+## Round 13 Notes — 2026-06-21
+
+**Goal.** Fix "麦克风调不起来" on the Intel (x64) build. Investigation established the root cause was NOT the recorder constraints/fallback code (which is correct and identical to the working arm64 path), but packaging: the Intel `.app` bundle was `not signed at all`, while arm64 was at least ad-hoc/linker-signed. An unsigned bundle has an unstable identity under macOS TCC, so the renderer helper's `getUserMedia` is blocked at the CoreAudio layer.
+
+### Root cause (verified by reading electron-builder 25.1.8 + @electron/osx-sign 1.3.1 source)
+
+No conventional `mac.identity` value makes electron-builder emit an ad-hoc signature:
+- `identity: null`  -> `macPackager.js:183-188` returns false, skips signing.
+- `identity: "-"`   -> electron-builder's own `findIdentity` finds no cert named `-`, `reportError` warns + returns false, never reaches osx-sign.
+- no identity + no cert -> osx-sign `sign.js:334` throws `No identity found for signing`.
+
+### Fix
+
+1. `build/entitlements.mac.plist` (new): cs.* keys required by arm64 Electron + `com.apple.security.device.audio-input`.
+2. `scripts/mac-adhoc-sign.cjs` (new): custom `mac.sign` hook. Bypasses electron-builder's findIdentity by calling native `codesign --sign - --force --deep --options runtime --entitlements <plist> <app>` directly, then `codesign --verify --deep --strict`, then `codesign -dv`. Initially tried `@electron/osx-sign` `signAsync` with `identity:"-", identityValidation:false` (which correctly emits `codesign -s -`), but osx-sign's `isbinaryfile` dependency crashes with `RangeError: Invalid array length` when scanning large native `.node` libs (sherpa-onnx). Direct `codesign` avoids that whole binary-detection path and is all ad-hoc signing needs.
+3. `package.json` `build.mac`: added `entitlements`, `entitlementsInherit` (both -> `build/entitlements.mac.plist`), and `sign` (-> `scripts/mac-adhoc-sign.cjs`). Left `identity` unset; the hook supplies `"-"`.
+
+The hook runs before DMG/ZIP packaging (afterPack -> sign -> packageInDistributableFormat), so the signed `.app` is embedded in the DMG.
+
+### Verification
+
+- `node --test test/*.test.js` -> 149 pass / 0 fail. No regression.
+- `npm run build:mac-x64` -> log shows `executing custom sign file=release/mac/typetype.app` then `codesign` succeeds; DMG `release/typetype-0.3.19.dmg` regenerated (09:23).
+- `codesign -dv release/mac/typetype.app`: `Signature=adhoc`, `flags=0x10002(adhoc,runtime)`, `Format=app bundle with Mach-O thin (x86_64)`. (Before: "code object is not signed at all".)
+- `codesign --verify --deep --strict` passes for app + ALL nested bundles incl. `typetype Helper (Renderer).app` (the one holding getUserMedia), now `Signature=adhoc`.
+- Embedded entitlements confirmed on main app: `cs.allow-jit`, `cs.allow-unsigned-executable-memory`, `cs.disable-library-validation`, `device.audio-input`.
+
+### Remaining (manual, user-side)
+
+- `tccutil reset Microphone app.typetype` to clear stale TCC records, then launch the app, grant mic, and record to confirm `getUserMedia` now succeeds.
+
+## Round 14 Notes — 2026-06-21
+
+**Goal.** Rebuild a pure Intel (x64) package without the redundant arm64 native libs that were inflating the DMG (the previous round's x64 build shipped both `sherpa-onnx-darwin-x64` AND `sherpa-onnx-darwin-arm64`).
+
+### Root cause of the bloat
+
+`sherpa-onnx-node` declares `sherpa-onnx-darwin-arm64` (and every other platform binary) as an `optionalDependency`. The `build:mac-x64` script runs `npm install sherpa-onnx-darwin-x64 --no-save --force`, but that `npm install` re-resolves `sherpa-onnx-node`'s optionalDependencies and re-installs the arm64 package too. The `asarUnpack` glob `node_modules/sherpa-onnx-darwin-arm64/**/*` then matches and ships it. So merely deleting the arm64 dir before the build does nothing — the build itself restores it.
+
+### Fix
+
+Added an explicit cleanup step between the `npm install` and `electron-builder` in both arch-specific scripts (`package.json`):
+- `build:mac-x64`: `... && node -e "require('fs').rmSync('node_modules/sherpa-onnx-darwin-arm64',{recursive:true,force:true})" && electron-builder --mac --x64`
+- `build:mac-arm64`: symmetric — removes `sherpa-onnx-darwin-x64` before `electron-builder --mac --arm64`
+
+This guarantees only the target-arch native lib is present when electron-builder packs.
+
+### Verification
+
+- During build `node_modules` contained only `sherpa-onnx-darwin-x64` at pack time.
+- `Sealed Resources version=2 rules=13 files=141` (was 148 — the 7 arm64 files dropped).
+- Mounted DMG: only `sherpa-onnx-darwin-x64` present; its `sherpa-onnx.node` is `Mach-O ... x86_64`.
+- Signature intact: `Signature=adhoc`, `flags=0x10002(adhoc,runtime)`, x86_64; entitlements include `cs.allow-jit` + `device.audio-input`.
+- DMG size: 1,132,982,574 bytes (~1.05 GiB / 1.13 GB), down from 1,153,093,473 bytes (~1.07 GiB / 1.15 GB). App bundle inside DMG: 1.8G (was 1.9G).
+- `release/typetype-0.3.19-mac.zip` was still compressing at report time (max compression over the large ONNX binaries is slow); DMG is the primary deliverable and is complete.

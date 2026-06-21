@@ -10,20 +10,20 @@ async function loadModule() {
   return import(moduleUrl);
 }
 
-test("buildAudioConstraints includes an exact deviceId when a microphone is selected", async () => {
+test("buildAudioConstraints includes an ideal deviceId when a microphone is selected", async () => {
   const { buildAudioConstraints } = await loadModule();
 
   assert.deepEqual(buildAudioConstraints("device-123"), {
-    channelCount: 1,
-    echoCancellation: false,
-    noiseSuppression: false,
-    autoGainControl: false,
-    deviceId: { exact: "device-123" },
+    channelCount: { ideal: 1 },
+    echoCancellation: { ideal: false },
+    noiseSuppression: { ideal: false },
+    autoGainControl: { ideal: false },
+    deviceId: { ideal: "device-123" },
   });
   assert.deepEqual(buildAudioConstraints(null), {
-    channelCount: 1,
-    echoCancellation: false,
-    noiseSuppression: false,
-    autoGainControl: false,
+    channelCount: { ideal: 1 },
+    echoCancellation: { ideal: false },
+    noiseSuppression: { ideal: false },
+    autoGainControl: { ideal: false },
   });
 });

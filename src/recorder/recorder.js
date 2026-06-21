@@ -210,6 +210,37 @@ async function createCaptureNode(context) {
   return fallbackNode;
 }
 
+async function resolveMicrophoneId(requestedId) {
+  if (!requestedId || requestedId === "default") {
+    return null;
+  }
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const audioInputs = devices.filter(d => d.kind === "audioinput");
+
+    // 1. Try to match by deviceId directly
+    const matchById = audioInputs.find(d => d.deviceId === requestedId);
+    if (matchById) {
+      return matchById.deviceId;
+    }
+
+    // 2. Try to match by label (case-insensitive, trimmed)
+    const requestedIdLower = requestedId.toLowerCase().trim();
+    const matchByLabel = audioInputs.find(
+      d => d.label.toLowerCase().trim() === requestedIdLower
+    );
+    if (matchByLabel) {
+      return matchByLabel.deviceId;
+    }
+
+    console.warn(`Requested microphone "${requestedId}" not found. Falling back to default.`);
+    return null;
+  } catch (e) {
+    console.error("Failed to enumerate devices:", e);
+    return null;
+  }
+}
+
 async function startRecording(microphoneId = null) {
   if (mediaStream) {
     return;
@@ -217,9 +248,55 @@ async function startRecording(microphoneId = null) {
 
   try {
     const context = await ensureAudioContext();
-    mediaStream = await navigator.mediaDevices.getUserMedia({
-      audio: buildAudioConstraints(microphoneId),
-    });
+    
+    // Resolve label/ID to actual WebRTC deviceId hash
+    const resolvedMicrophoneId = await resolveMicrophoneId(microphoneId);
+
+    // Initial attempt with resolved ID and standard audio properties
+    const constraints = buildAudioConstraints(resolvedMicrophoneId);
+    
+    try {
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: constraints,
+      });
+    } catch (firstError) {
+      console.warn("First getUserMedia attempt failed, trying fallback...", firstError);
+      let failedConstraint = "";
+      if (firstError && firstError.name === "OverconstrainedError") {
+        failedConstraint = firstError.constraint || "";
+        console.warn(`Overconstrained constraint: ${failedConstraint}`);
+      }
+
+      // Fallback 1: Retry with resolved ID but fully relaxed/empty constraints
+      if (resolvedMicrophoneId) {
+        try {
+          console.log("Retrying with ideal deviceId only...");
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: { deviceId: { ideal: resolvedMicrophoneId } },
+          });
+        } catch (secondError) {
+          console.warn("Second getUserMedia attempt failed, trying default audio source...", secondError);
+        }
+      }
+
+      // Fallback 2: Retry with completely generic audio: true
+      if (!mediaStream) {
+        try {
+          console.log("Retrying with fallback audio: true...");
+          mediaStream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+          });
+        } catch (thirdError) {
+          // If all fail, throw a detailed error
+          const originalMsg = firstError instanceof Error ? `${firstError.name}: ${firstError.message}` : String(firstError);
+          const finalMsg = thirdError instanceof Error ? `${thirdError.name}: ${thirdError.message}` : String(thirdError);
+          const errMsg = `Failed to start recording. Original error: ${originalMsg}` +
+            (failedConstraint ? ` (failed constraint: ${failedConstraint})` : "") +
+            `. Fallback error: ${finalMsg}`;
+          throw new Error(errMsg);
+        }
+      }
+    }
 
     sourceNode = context.createMediaStreamSource(mediaStream);
     analyser = context.createAnalyser();
