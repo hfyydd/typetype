@@ -283,6 +283,9 @@ export interface PreloadResourceView {
   status: PreloadResourceStatus;
   label: string;
   detail: string;
+  action?: 'install_runtime_dependency';
+  action_label?: string;
+  action_enabled?: boolean;
 }
 
 export interface PreloadStatusView {
@@ -301,6 +304,49 @@ export interface AsrDiagnostics {
   backend: string;
   runtime: string;
   message: string;
+  itn_enabled: boolean;
+  hotwords_supported: boolean;
+  hotwords_enabled: boolean;
+  hotwords_count: number;
+  hotwords_path: string;
+  code_switch_lexicon_count: number;
+  dictionary_count: number;
+  normalization_mode: string;
+  punctuation_ready: boolean;
+  punctuation_available: boolean;
+  punctuation_detail: string;
+  punctuation_runtime_native_dir: string;
+  punctuation_runtime_binding_exists: boolean;
+  punctuation_runtime_dll_exists: boolean;
+  punctuation_directml_dll_exists: boolean;
+  punctuation_last_error: string;
+  punctuation_last_raw_error: string;
+  runtime_dependency_status: string;
+  vc_redist_installed: boolean;
+  vc_redist_version: string;
+  vc_redist_installer_exists: boolean;
+  vc_redist_install_log: string;
+  shortcut_health: string;
+  registered_shortcuts: string[];
+  last_shortcut_event_at: string;
+  last_shortcut_intent: string;
+  last_shortcut_repair_at: string;
+  recorder_pending_start: boolean;
+  recorder_pending_stop: boolean;
+  recorder_start_in_flight: boolean;
+  recorder_stop_in_flight: boolean;
+  runtime_status: string;
+  runtime_status_since: string;
+  last_non_streaming_timing: unknown;
+  last_non_streaming_refined_text_length: number;
+}
+
+export interface AsrHotwordStatus {
+  supported: boolean;
+  enabled: boolean;
+  path: string | null;
+  count: number;
+  reason: string;
 }
 
 export type RuntimeStatus = 'idle' | 'recording' | 'transcribing' | 'polishing' | 'translating' | 'stopped' | 'done';

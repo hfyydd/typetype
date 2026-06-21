@@ -13,11 +13,11 @@ function createLexicon() {
   });
 }
 
-test("bundled code-switch lexicon is a real 10000-entry first-release library", () => {
+test("bundled code-switch lexicon is a real 50000-entry first-release library", () => {
   const parsed = JSON.parse(fs.readFileSync(lexiconPath, "utf8"));
   const terms = new Set(parsed.entries.map((entry) => entry.term));
 
-  assert.ok(parsed.entries.length >= 10000);
+  assert.ok(parsed.entries.length >= 50000);
   assert.equal(terms.has("check 一下"), true);
   assert.equal(terms.has("send 个 file"), true);
   assert.equal(terms.has("你有冇 confirm meeting"), true);
@@ -31,6 +31,9 @@ test("bundled code-switch lexicon is a real 10000-entry first-release library", 
   assert.equal(terms.has("RAG"), true);
   assert.equal(terms.has("embedding"), true);
   assert.equal(terms.has("tool calling"), true);
+  assert.equal(terms.has("狱政管理"), true);
+  assert.equal(terms.has("狱侦科"), true);
+  assert.equal(terms.has("驻监检察室"), true);
 });
 
 test("CodeSwitchLexicon restores common mixed Chinese-English workplace terms", () => {

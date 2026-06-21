@@ -1,6 +1,6 @@
 {
   "name": "typetype",
-  "version": "0.3.1",
+  "version": "0.3.6",
   "description": "typetype local voice input tool with offline ASR",
   "main": "dist-electron/main.js",
   "author": "typetype",
@@ -9,8 +9,9 @@
     "dev": "npm run build:electron && electron .",
     "build:electron": "node -e \"require('fs').rmSync('dist-electron',{recursive:true,force:true})\" && tsc -p tsconfig.json",
     "build:code-switch-lexicon": "node scripts/build_code_switch_lexicon.js",
-    "build": "npm run build:electron && electron-builder --mac",
-    "build:mac": "npm run build:electron && electron-builder --mac"
+    "build": "npm run build:electron && electron-builder --mac --windows",
+    "build:mac": "npm run build:electron && electron-builder --mac",
+    "build:win": "npm run build:electron && electron-builder --win"
   },
   "dependencies": {
     "@huggingface/tokenizers": "^0.1.3",
@@ -20,6 +21,7 @@
     "mammoth": "^1.12.0",
     "onnxruntime-node": "1.24.3",
     "sherpa-onnx-node": "^1.12.39",
+    "sherpa-onnx-win-x64": "^1.12.39",
     "tar-stream": "^3.2.0",
     "xlsx": "^0.18.5"
   },
@@ -33,11 +35,13 @@
     "appId": "app.typetype",
     "productName": "typetype",
     "electronDist": "node_modules/electron/dist",
+    "afterPack": "scripts/after-pack-rcedit.cjs",
     "directories": {
       "output": "release"
     },
     "asarUnpack": [
       "node_modules/sherpa-onnx-node/**/*",
+      "node_modules/sherpa-onnx-win-x64/**/*",
       "node_modules/onnxruntime-node/**/*"
     ],
     "files": [
@@ -52,7 +56,8 @@
           "!models/**",
           "!punctuation-models/**",
           "!translation-models/**",
-          "!runtimes/**"
+          "!runtimes/**",
+          "!runtime-installers/**"
         ]
       }
     ],
@@ -80,6 +85,20 @@
         "filter": [
           "**/*"
         ]
+      },
+      {
+        "from": "resources/runtimes",
+        "to": "runtimes",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/runtime-installers",
+        "to": "runtime-installers",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "mac": {
@@ -89,6 +108,27 @@
         "zip"
       ],
       "icon": "resources/icon.icns"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "signAndEditExecutable": false,
+      "electronLanguages": [
+        "zh-CN",
+        "en-US"
+      ],
+      "icon": "resources/icon.ico",
+      "extraFiles": [
+        {
+          "from": "node_modules/electron/dist/ffmpeg.dll",
+          "to": "."
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
     }
   }
 }

@@ -98,3 +98,16 @@ test("local rewrite punctuates casual streaming speech with modal particles", ()
   assert.equal(result.refinedRawText.includes("你整啥呢？"), true);
   assert.ok((result.refinedRawText.match(/[。？]/g) || []).length >= 5);
 });
+
+test("local rewrite restores semantic punctuation for streaming final text", () => {
+  const result = rewriteChineseLocally({
+    rawText: "下一个重点是讨论一下要怎么让更新通过线上更新来处理也就是说就算有报错也可以通过线上下载",
+    scenario: "general",
+    final: true,
+  });
+
+  assert.equal(result.refinedRawText.includes("下一个重点是讨论一下"), true);
+  assert.equal(result.refinedRawText.includes("也就是说"), true);
+  assert.equal(result.refinedRawText.endsWith("。"), true);
+  assert.ok((result.refinedRawText.match(/[，。]/g) || []).length >= 2);
+});

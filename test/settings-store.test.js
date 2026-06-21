@@ -142,8 +142,25 @@ test("settings UI exposes current LLM rewrite controls without legacy polish fie
   assert.equal(html.includes('id="asr-diagnostics-button"'), true);
   assert.equal(html.includes('id="asr-diagnostics-output"'), true);
   assert.equal(html.includes('id="copy-asr-diagnostics-button"'), true);
+  assert.equal(html.includes('id="repair-shortcuts-button"'), true);
+  assert.equal(html.includes("修复快捷键和录音状态"), true);
   assert.equal(script.includes("runAsrDiagnostics"), true);
+  assert.equal(script.includes("repairShortcutsAndRecorder"), true);
   assert.equal(script.includes("formatAsrDiagnostics"), true);
+  assert.equal(script.includes("ASR 热词"), true);
+  assert.equal(script.includes("混输词库条数"), true);
+  assert.equal(script.includes("个人词典条数"), true);
+  assert.equal(script.includes("normalization_mode"), true);
+  assert.equal(script.includes("本地断句增强"), true);
+  assert.equal(script.includes("ONNX 绑定文件"), true);
+  assert.equal(script.includes("installRuntimeDependency"), true);
+  assert.equal(script.includes("安装/修复系统运行库"), true);
+  assert.equal(script.includes("VC++ 运行库"), true);
+  assert.equal(script.includes("快捷键健康"), true);
+  assert.equal(script.includes("最近非流式耗时"), true);
+  assert.equal(script.includes("LLM 是否阻塞首回填"), true);
+  assert.equal(html.includes("安全软件信任 typetype 安装目录"), true);
+  assert.equal(html.includes("无需自行找下载链接"), true);
 });
 
 test("settings UI no longer exposes writing profile controls", () => {

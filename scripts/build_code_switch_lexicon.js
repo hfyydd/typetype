@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 
-const TARGET_ENTRY_COUNT = 10000;
+const TARGET_ENTRY_COUNT = 50000;
 const repoRoot = path.join(__dirname, "..");
 const lexiconPath = path.join(repoRoot, "resources", "lexicons", "code-switch-lexicon.json");
 
@@ -196,6 +196,30 @@ const DOMAIN_GROUPS = [
       "RFQ", "POC", "pilot", "contract", "NDA", "SLA", "SOW", "MSA", "compliance", "audit",
       "due diligence", "risk control", "KYC", "AML", "legal", "privacy", "GDPR", "DPA", "security",
       "ISO", "SOC 2", "license", "copyright", "trademark", "patent", "approval", "settlement"
+    ],
+  },
+  {
+    category: "justice-law-enforcement",
+    tags: ["justice", "law-enforcement", "prison", "public-security"],
+    context: ["政法", "公安", "法院", "检察", "监狱", "司法", "执法", "案件", "监管", "矫正"],
+    prefixes: [
+      "政法系统", "公安系统", "监狱系统", "公检法系统", "司法行政", "公安机关", "检察机关",
+      "人民法院", "人民检察院", "司法局", "公安局", "派出所", "看守所", "拘留所", "戒毒所",
+      "监狱管理局", "狱政管理", "狱内侦查", "狱侦", "狱侦科", "狱情分析", "狱情研判",
+      "监管安全", "监管秩序", "监管改造", "安全隐患排查", "应急处突", "值班备勤",
+      "刑罚执行", "暂予监外执行", "减刑假释", "假释评估", "计分考核", "分级处遇",
+      "服刑人员", "罪犯管理", "罪犯教育改造", "教育改造", "个别教育", "谈话教育",
+      "入监教育", "出监教育", "心理矫治", "心理疏导", "危险评估", "顽危犯", "重点人员",
+      "重点罪犯", "互监组", "监区", "分监区", "劳动改造", "职业技能培训", "亲情帮教",
+      "社区矫正", "安置帮教", "矫正对象", "司法所", "执法办案中心", "接处警", "警情",
+      "案管中心", "案件管理", "卷宗", "案号", "立案", "受案", "侦查", "刑侦", "经侦",
+      "网安", "禁毒", "治安", "交警", "户籍", "反诈", "情报研判", "风险防控",
+      "强制措施", "刑事拘留", "刑拘", "逮捕", "取保候审", "监视居住", "提讯", "提审",
+      "讯问", "询问", "辨认", "搜查", "扣押", "冻结", "移送审查起诉", "审查起诉",
+      "公诉", "不起诉", "检察监督", "侦查监督", "刑事执行检察", "驻监检察",
+      "驻监检察室", "巡回检察", "检察建议", "公益诉讼", "批捕", "起诉书", "量刑建议",
+      "庭审", "开庭", "合议庭", "审判委员会", "判决", "裁定", "执行局", "法警",
+      "司法警察", "送达", "调解", "行政复议", "行政诉讼", "普法宣传", "法治宣传"
     ],
   },
   {
@@ -476,7 +500,7 @@ const entries = Array.from(entriesByTerm.values()).slice(0, TARGET_ENTRY_COUNT);
 const output = {
   version: 1,
   target_entry_count: TARGET_ENTRY_COUNT,
-  generated_at: "2026-06-04",
+  generated_at: "2026-06-11",
   entries,
 };
 

@@ -466,6 +466,7 @@ function renderPreloadStatus(status = {}) {
     <div class="preload-status-item" data-status="${escapeHtml(item.status)}">
       <strong>${escapeHtml(item.label)}</strong>
       <span>${escapeHtml(item.detail)}</span>
+      ${item.action ? `<button type="button" class="settings-secondary-button preload-status-action" data-preload-action="${escapeHtml(item.action)}" ${item.action_enabled === false ? "disabled" : ""}>${escapeHtml(item.action_label || "处理")}</button>` : ""}
     </div>
   `).join("");
 }
@@ -845,6 +846,14 @@ async function exportDictionary() {
 }
 
 function formatAsrDiagnostics(report) {
+  const hotwordState = report.hotwords_enabled
+    ? "已启用"
+    : report.hotwords_supported
+      ? "支持但未启用"
+      : "当前模式不支持底层热词";
+  const timing = report.last_non_streaming_timing && typeof report.last_non_streaming_timing === "object"
+    ? report.last_non_streaming_timing
+    : {};
   return [
     `结果: ${report.ok ? "通过" : "失败"}`,
     `模式: ${report.mode}`,
@@ -852,6 +861,40 @@ function formatAsrDiagnostics(report) {
     `模型目录: ${report.model_path}`,
     `后端: ${report.backend}`,
     `运行时: ${report.runtime}`,
+    `ITN: ${report.itn_enabled ? `已启用（${report.normalization_mode || "保守转换"}）` : "未启用"}`,
+    `ASR 热词: ${hotwordState}`,
+    `ASR 热词条数: ${report.hotwords_count ?? 0}`,
+    `ASR 热词文件: ${report.hotwords_path || "无"}`,
+    `混输词库条数: ${report.code_switch_lexicon_count ?? 0}`,
+    `个人词典条数: ${report.dictionary_count ?? 0}`,
+    `本地断句增强: ${report.punctuation_ready ? "已就绪" : report.punctuation_available ? "不可用，已使用基础断句" : "资源缺失，已使用基础断句"}`,
+    `本地断句说明: ${report.punctuation_detail || "无"}`,
+    `ONNX 原生目录: ${report.punctuation_runtime_native_dir || "未找到"}`,
+    `ONNX 绑定文件: ${report.punctuation_runtime_binding_exists ? "存在" : "缺失"}`,
+    `ONNX 运行库: ${report.punctuation_runtime_dll_exists ? "存在" : "缺失"}`,
+    `DirectML 运行库: ${report.punctuation_directml_dll_exists ? "存在" : "缺失或不适用"}`,
+    `本地断句错误: ${report.punctuation_last_error || "无"}`,
+    `本地断句原始错误: ${report.punctuation_last_raw_error || "无"}`,
+    `系统运行库状态: ${report.runtime_dependency_status || "未知"}`,
+    `VC++ 运行库: ${report.vc_redist_installed ? "已安装" : "未检测到"}`,
+    `VC++ 运行库版本: ${report.vc_redist_version || "未知"}`,
+    `VC++ 安装器: ${report.vc_redist_installer_exists ? "已内置" : "缺失"}`,
+    `VC++ 安装日志: ${report.vc_redist_install_log || "无"}`,
+    `快捷键健康: ${report.shortcut_health || "未知"}`,
+    `已注册快捷键: ${(report.registered_shortcuts || []).join(" / ") || "无"}`,
+    `最近快捷键触发: ${report.last_shortcut_event_at || "无"}`,
+    `最近快捷键意图: ${report.last_shortcut_intent || "无"}`,
+    `最近快捷键修复: ${report.last_shortcut_repair_at || "无"}`,
+    `录音启动等待中: ${report.recorder_pending_start ? "是" : "否"}`,
+    `录音停止等待中: ${report.recorder_pending_stop ? "是" : "否"}`,
+    `录音启动处理中: ${report.recorder_start_in_flight ? "是" : "否"}`,
+    `录音停止处理中: ${report.recorder_stop_in_flight ? "是" : "否"}`,
+    `当前运行状态: ${report.runtime_status || "未知"}`,
+    `运行状态开始时间: ${report.runtime_status_since || "未知"}`,
+    `最近非流式耗时: engine=${timing.engine_ready_ms ?? "-"}ms, asr=${timing.asr_ms ?? "-"}ms, cleanup=${timing.cleanup_ms ?? "-"}ms, quality=${timing.quality_ms ?? "-"}ms, output=${timing.output_ms ?? "-"}ms, total=${timing.total_ms ?? "-"}ms`,
+    `最近非流式断句: ${timing.punctuation_source || "无"}${timing.punctuation_timed_out ? "（超时降级）" : ""}`,
+    `LLM 是否阻塞首回填: ${timing.llm_blocked ? "是" : "否"}`,
+    `后台精修长度: ${report.last_non_streaming_refined_text_length || 0}`,
     `说明: ${report.message}`,
   ].join("\n");
 }
@@ -946,9 +989,32 @@ async function runAction(command, successMessage, failureMessage = "请求没有
   }
 }
 
+async function handlePreloadAction(action) {
+  if (action !== "install_runtime_dependency") {
+    return;
+  }
+
+  setStatus("正在安装/修复系统运行库，可能会出现 Windows 权限确认…");
+  try {
+    const result = await electronAPI.installRuntimeDependency();
+    setStatus(result.message, result.ok ? "default" : "error");
+    await refreshSettingsView();
+  } catch (error) {
+    setStatus(error?.message || "系统运行库安装没有成功。已写入本地日志。", "error");
+  }
+}
+
 for (const item of navItems) {
   item.addEventListener("click", () => activatePanel(item.dataset.panelTarget));
 }
+
+preloadStatusGrid?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-preload-action]");
+  if (!button || button.disabled) {
+    return;
+  }
+  void handlePreloadAction(button.dataset.preloadAction);
+});
 
 hotkeyProfileDefaultButton.addEventListener("click", () => applyHotkeyProfile("default"));
 hotkeyProfileAltButton.addEventListener("click", () => applyHotkeyProfile("alt"));
@@ -1138,6 +1204,19 @@ document.querySelector("#asr-diagnostics-button").addEventListener("click", asyn
     await refreshSettingsView();
   } catch (_) {
     setStatus("ASR 自检没有成功完成。已写入本地日志。", "error");
+  }
+});
+
+document.querySelector("#repair-shortcuts-button").addEventListener("click", async () => {
+  setStatus("正在修复快捷键和录音状态…");
+  try {
+    const result = await electronAPI.repairShortcutsAndRecorder();
+    setStatus(result.message, result.ok ? "default" : "error");
+    const report = await electronAPI.runAsrDiagnostics();
+    asrDiagnosticsOutput.value = formatAsrDiagnostics(report);
+    await refreshSettingsView();
+  } catch (error) {
+    setStatus(error?.message || "快捷键和录音状态修复失败。已写入本地日志。", "error");
   }
 });
 

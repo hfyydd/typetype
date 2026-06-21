@@ -6,7 +6,7 @@ const {
   scheduleTranscriptionStart,
 } = require("../dist-electron/transcription-timing.js");
 
-test("scheduleTranscriptionStart defers work long enough for the thinking UI to paint", async () => {
+test("scheduleTranscriptionStart schedules work immediately for fast non-streaming output", async () => {
   let called = false;
 
   scheduleTranscriptionStart(() => {
@@ -29,6 +29,7 @@ test("scheduleTranscriptionStart uses the configured thinking lead-in delay", ()
   });
 
   assert.equal(scheduled.length, 1);
+  assert.equal(THINKING_UI_LEAD_IN_MS, 0);
   assert.equal(scheduled[0].delayMs, THINKING_UI_LEAD_IN_MS);
   assert.equal(typeof scheduled[0].callback, "function");
 });

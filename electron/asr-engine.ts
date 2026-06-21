@@ -6,7 +6,7 @@ import { app } from 'electron';
 
 import { getDefaultNumThreads, getProviderCandidates, ProviderName } from './asr-runtime';
 import { stripUnknownTokens } from './transcript-cleanup';
-import { ComputeBackend, RecognitionMode, RichAsrResult } from './types';
+import { AsrHotwordStatus, ComputeBackend, RecognitionMode, RichAsrResult } from './types';
 
 export interface ModelFiles {
   modelPath: string;
@@ -95,7 +95,16 @@ interface AsrEngineOptions {
   computeBackend?: ComputeBackend;
   numThreads?: number;
   recognitionMode?: RecognitionMode;
+  hotwordStatus?: AsrHotwordStatus;
 }
+
+const DEFAULT_HOTWORD_STATUS: AsrHotwordStatus = {
+  supported: false,
+  enabled: false,
+  path: null,
+  count: 0,
+  reason: '未准备热词',
+};
 
 function getModelFilesFromDirectory(modelDirectory: string): ModelFiles | null {
   const modelCandidates = [
@@ -325,12 +334,14 @@ export class AsrEngine {
   private activeProvider: ProviderName | null = null;
   private recognitionMode: RecognitionMode;
   private modelFiles: ModelFiles | null;
+  private hotwordStatus: AsrHotwordStatus;
 
   constructor(modelFiles: ModelFiles | null = null, options: AsrEngineOptions = {}) {
     this.modelFiles = modelFiles;
     this.computeBackend = options.computeBackend ?? 'auto';
     this.numThreads = options.numThreads ?? getDefaultNumThreads();
     this.recognitionMode = options.recognitionMode ?? 'non_streaming';
+    this.hotwordStatus = options.hotwordStatus ?? DEFAULT_HOTWORD_STATUS;
   }
 
   async initialize(): Promise<void> {
@@ -521,6 +532,10 @@ export class AsrEngine {
 
   getRecognitionMode(): RecognitionMode {
     return this.recognitionMode;
+  }
+
+  getHotwordStatus(): AsrHotwordStatus {
+    return { ...this.hotwordStatus };
   }
 
   static findModelPath(searchPaths: string[], recognitionMode?: RecognitionMode): ModelFiles | null {

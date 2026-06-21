@@ -17,6 +17,31 @@ const GENERATED_SECTION_NAMES = [
   '说明',
 ];
 
+const DIAGNOSTIC_LINE_PATTERNS = [
+  /ONNX\s*Runtime/iu,
+  /onnxruntime/iu,
+  /onnxruntime_binding\.node/iu,
+  /app\.asar/iu,
+  /node_modules/iu,
+  /The operating system cannot run %1/iu,
+  /dynamic link library/iu,
+  /DLL initialization/iu,
+  /Visual C\+\+/iu,
+  /Microsoft Visual C\+\+/iu,
+  /系统运行库/u,
+  /本地断句增强需要/u,
+  /基础断句已可用/u,
+  /请安装.*运行库/u,
+  /安装\/修复/u,
+  /整理稿已更新/u,
+  /最近整理/u,
+  /自动回填/u,
+  /API\s*(?:稳定|正在|纠错|整理|未配置)/iu,
+  /Thinking/iu,
+  /^[A-Z]:\\/u,
+  /\\\\\?\\/u,
+];
+
 function stripMarkdownLine(line: string): string {
   const withoutMarkdown = line
     .replace(/\*\*/g, '')
@@ -67,6 +92,11 @@ function isBoilerplateLine(line: string): boolean {
   ].some((pattern) => pattern.test(normalized));
 }
 
+function isDiagnosticLine(line: string): boolean {
+  const cleaned = stripMarkdownLine(line);
+  return DIAGNOSTIC_LINE_PATTERNS.some((pattern) => pattern.test(cleaned));
+}
+
 function isUsefulSectionHeading(line: string): boolean {
   return /^(?:AI\s*修正原文|修正原文|原文精修|整理稿|会议纪要|结构化草稿|AI\s*整理稿)\s*[:：]?\s*$/u.test(stripMarkdownLine(line));
 }
@@ -95,7 +125,7 @@ export function sanitizeStreamingAiText(text: string): string {
       continue;
     }
 
-    if (isBoilerplateLine(rawLine) || isGeneratedStatusLine(rawLine)) {
+    if (isBoilerplateLine(rawLine) || isGeneratedStatusLine(rawLine) || isDiagnosticLine(rawLine)) {
       continue;
     }
 

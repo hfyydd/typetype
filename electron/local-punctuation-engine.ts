@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import * as ort from 'onnxruntime-node';
 import { Tokenizer } from '@huggingface/tokenizers';
+import { applyBasicTranscriptPunctuation } from './transcript-punctuation';
 
 export type LocalPunctuationSource = 'model' | 'rules';
 
@@ -10,6 +10,8 @@ export interface LocalPunctuationEngineOptions {
   processResourcesPath?: string;
   appPath?: string;
   modelDir?: string;
+  onnxRuntimeNativeDir?: string;
+  onnxRuntimeLoader?: OnnxRuntimeLoader;
 }
 
 export interface LocalPunctuationRestoreOptions {
@@ -40,6 +42,40 @@ interface CollectedSegment {
   postPreds: Array<string | null>;
   segPreds: boolean[];
   index: number;
+}
+
+type OrtTensorData = ArrayLike<number | bigint | boolean>;
+
+interface OrtTensorLike {
+  data: OrtTensorData;
+}
+
+interface OrtInferenceSessionLike {
+  run(inputs: Record<string, unknown>): Promise<Record<string, OrtTensorLike>>;
+}
+
+interface OrtModuleLike {
+  InferenceSession: {
+    create(
+      modelPath: string,
+      options: { executionProviders: string[] }
+    ): Promise<OrtInferenceSessionLike>;
+  };
+  Tensor: new (type: 'int64', data: BigInt64Array, dims: number[]) => unknown;
+}
+
+export type OnnxRuntimeLoader = () => Promise<OrtModuleLike> | OrtModuleLike;
+
+export interface LocalPunctuationRuntimeDiagnostics {
+  native_dir: string;
+  binding_path: string;
+  binding_exists: boolean;
+  runtime_dll_path: string;
+  runtime_dll_exists: boolean;
+  directml_dll_path: string;
+  directml_dll_exists: boolean;
+  last_error: string;
+  last_raw_error: string;
 }
 
 const MODEL_DIR_NAME = 'pcs-47lang';
@@ -74,6 +110,10 @@ const POST_LABELS = [
 const CJK_RE = /[\u3400-\u9fff]/u;
 const SENTENCE_END_RE = /[。！？!?]$/u;
 const CLAUSE_PUNCTUATION_RE = /[，,。！？!?、；;：:]/gu;
+const ONNX_RUNTIME_NODE_MODULE_DIR = path.join('node_modules', 'onnxruntime-node', 'bin', 'napi-v6');
+const ONNX_BINDING_FILE = 'onnxruntime_binding.node';
+const ONNX_RUNTIME_DLL = process.platform === 'win32' ? 'onnxruntime.dll' : 'libonnxruntime.so';
+const DIRECTML_DLL = 'DirectML.dll';
 
 export function resolveBundledPunctuationModelPath(options: LocalPunctuationEngineOptions = {}): string | null {
   const candidates = [
@@ -102,12 +142,46 @@ export function hasRequiredPunctuationFiles(modelDir: string): boolean {
   ].every((fileName) => fs.existsSync(path.join(modelDir, fileName)));
 }
 
+export function inspectOnnxRuntimeNativeFiles(
+  options: LocalPunctuationEngineOptions = {}
+): LocalPunctuationRuntimeDiagnostics {
+  const nativeDir = resolveOnnxRuntimeNativeDir(options) ?? getOnnxRuntimeNativeDirCandidates(options)[0] ?? '';
+  const bindingPath = nativeDir ? path.join(nativeDir, ONNX_BINDING_FILE) : '';
+  const runtimeDllPath = nativeDir ? path.join(nativeDir, ONNX_RUNTIME_DLL) : '';
+  const directmlDllPath = process.platform === 'win32' && nativeDir ? path.join(nativeDir, DIRECTML_DLL) : '';
+
+  return {
+    native_dir: nativeDir,
+    binding_path: bindingPath,
+    binding_exists: Boolean(bindingPath && fs.existsSync(bindingPath)),
+    runtime_dll_path: runtimeDllPath,
+    runtime_dll_exists: Boolean(runtimeDllPath && fs.existsSync(runtimeDllPath)),
+    directml_dll_path: directmlDllPath,
+    directml_dll_exists: process.platform === 'win32'
+      ? Boolean(directmlDllPath && fs.existsSync(directmlDllPath))
+      : true,
+    last_error: '',
+    last_raw_error: '',
+  };
+}
+
+export function resolveOnnxRuntimeNativeDir(options: LocalPunctuationEngineOptions = {}): string | null {
+  for (const candidate of getOnnxRuntimeNativeDirCandidates(options)) {
+    if (fs.existsSync(path.join(candidate, ONNX_BINDING_FILE))) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
 export class LocalPunctuationEngine {
   private modelDir: string | null;
   private tokenizer: TokenizerLike | null = null;
-  private session: ort.InferenceSession | null = null;
+  private session: OrtInferenceSessionLike | null = null;
+  private ort: OrtModuleLike | null = null;
   private loadPromise: Promise<void> | null = null;
   private lastError: Error | null = null;
+  private lastRawError: Error | null = null;
 
   constructor(private options: LocalPunctuationEngineOptions = {}) {
     this.modelDir = resolveBundledPunctuationModelPath(options);
@@ -115,15 +189,32 @@ export class LocalPunctuationEngine {
 
   getStatus(): { ready: boolean; available: boolean; detail: string } {
     if (this.session && this.tokenizer) {
-      return { ready: true, available: true, detail: '本地断句模型 ready。' };
+      return { ready: true, available: true, detail: '本地断句增强已就绪。' };
     }
     if (!this.modelDir) {
-      return { ready: false, available: false, detail: '未找到本地断句模型资源，使用规则兜底。' };
+      return { ready: false, available: false, detail: '未找到本地断句增强资源，已使用基础断句。' };
     }
     if (this.lastError) {
-      return { ready: false, available: true, detail: this.lastError.message };
+      return { ready: false, available: true, detail: '本地断句增强需要系统运行库，基础断句已可用。' };
     }
-    return { ready: false, available: true, detail: '本地断句模型加载中。' };
+    return { ready: false, available: true, detail: '本地断句增强等待后台加载。' };
+  }
+
+  getDiagnostics(): LocalPunctuationRuntimeDiagnostics {
+    return {
+      ...inspectOnnxRuntimeNativeFiles(this.options),
+      last_error: this.lastError?.message ?? '',
+      last_raw_error: this.lastRawError?.message ?? '',
+    };
+  }
+
+  reset(): void {
+    this.tokenizer = null;
+    this.session = null;
+    this.ort = null;
+    this.loadPromise = null;
+    this.lastError = null;
+    this.lastRawError = null;
   }
 
   async warmup(): Promise<void> {
@@ -160,9 +251,13 @@ export class LocalPunctuationEngine {
     } catch (error) {
       const e = error instanceof Error ? error : new Error(String(error));
       this.lastError = e;
+      if (!this.lastRawError) {
+        this.lastRawError = e;
+      }
+      const fallbackText = buildRuleFallbackText(rawText, options.final ?? false);
       return {
-        text: '',
-        sentences: [],
+        text: fallbackText,
+        sentences: splitPunctuatedSentences(fallbackText),
         source: 'rules',
         ready: false,
         error: e.message,
@@ -183,7 +278,8 @@ export class LocalPunctuationEngine {
     if (!this.loadPromise) {
       this.loadPromise = this.loadModel(this.modelDir)
         .catch((error) => {
-          this.lastError = error instanceof Error ? error : new Error(String(error));
+          this.lastRawError = error instanceof Error ? error : new Error(String(error));
+          this.lastError = this.normalizeLoadError(error);
           throw this.lastError;
         })
         .finally(() => {
@@ -194,13 +290,46 @@ export class LocalPunctuationEngine {
   }
 
   private async loadModel(modelDir: string): Promise<void> {
+    const ort = await this.loadOnnxRuntime();
     const tokenizerJson = JSON.parse(fs.readFileSync(path.join(modelDir, TOKENIZER_JSON), 'utf8'));
     const tokenizerConfig = JSON.parse(fs.readFileSync(path.join(modelDir, TOKENIZER_CONFIG_JSON), 'utf8'));
     this.tokenizer = new Tokenizer(tokenizerJson, tokenizerConfig) as unknown as TokenizerLike;
+    this.ort = ort;
     this.session = await ort.InferenceSession.create(path.join(modelDir, ONNX_MODEL), {
       executionProviders: ['cpu'],
     });
     this.lastError = null;
+    this.lastRawError = null;
+  }
+
+  private async loadOnnxRuntime(): Promise<OrtModuleLike> {
+    const loader = this.options.onnxRuntimeLoader ?? loadDefaultOnnxRuntime;
+    const loaded = await loader();
+    if (!loaded?.InferenceSession?.create || !loaded?.Tensor) {
+      throw new Error('ONNX Runtime 组件不完整');
+    }
+    return loaded;
+  }
+
+  private normalizeLoadError(error: unknown): Error {
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    const diagnostics = inspectOnnxRuntimeNativeFiles(this.options);
+    const details = [`ONNX Runtime 加载失败：${rawMessage}`];
+
+    if (!diagnostics.binding_exists) {
+      details.push(`缺少 ${diagnostics.binding_path || ONNX_BINDING_FILE}`);
+    }
+    if (process.platform === 'win32') {
+      if (!diagnostics.runtime_dll_exists) {
+        details.push(`缺少 ${diagnostics.runtime_dll_path || ONNX_RUNTIME_DLL}`);
+      }
+      if (!diagnostics.directml_dll_exists) {
+        details.push(`缺少 ${diagnostics.directml_dll_path || DIRECTML_DLL}`);
+      }
+      details.push('请安装 Microsoft Visual C++ 2015-2022 x64，更新 Windows/显卡驱动，并检查安全软件是否拦截 typetype 目录内 DLL。');
+    }
+
+    return new Error(details.join(' '));
   }
 
   private async restoreWithModel(text: string): Promise<string[]> {
@@ -223,12 +352,12 @@ export class LocalPunctuationEngine {
   }
 
   private async runSegment(segment: PunctuationSegment): Promise<CollectedSegment> {
-    if (!this.session) {
+    if (!this.session || !this.ort) {
       throw new Error('本地断句模型未加载');
     }
 
     const inputIds = [BOS_ID, ...segment.ids, EOS_ID];
-    const inputTensor = new ort.Tensor(
+    const inputTensor = new this.ort.Tensor(
       'int64',
       BigInt64Array.from(inputIds.map((id) => BigInt(id))),
       [1, inputIds.length]
@@ -255,7 +384,38 @@ export class LocalPunctuationEngine {
   }
 }
 
-function tensorDataToNumbers(data: ort.Tensor.DataType): number[] {
+async function loadDefaultOnnxRuntime(): Promise<OrtModuleLike> {
+  const loaded = await import('onnxruntime-node') as unknown as OrtModuleLike & { default?: OrtModuleLike };
+  return (loaded.InferenceSession ? loaded : loaded.default) as OrtModuleLike;
+}
+
+function getOnnxRuntimeNativeDirCandidates(options: LocalPunctuationEngineOptions = {}): string[] {
+  const arch = process.arch;
+  const platform = process.platform;
+  const relativeDir = path.join(ONNX_RUNTIME_NODE_MODULE_DIR, platform, arch);
+  const candidates = options.onnxRuntimeNativeDir
+    ? [options.onnxRuntimeNativeDir]
+    : [
+      options.processResourcesPath
+        ? path.join(options.processResourcesPath, 'app.asar.unpacked', relativeDir)
+        : null,
+      options.appPath ? path.join(options.appPath, relativeDir) : null,
+      path.join(__dirname, '..', relativeDir),
+      path.join(__dirname, '..', '..', relativeDir),
+    ];
+
+  return Array.from(new Set(candidates.filter((value): value is string => Boolean(value))));
+}
+
+function buildRuleFallbackText(rawText: string, final: boolean): string {
+  const text = rawText.trim();
+  if (!text) {
+    return '';
+  }
+  return final ? applyBasicTranscriptPunctuation(text) : text;
+}
+
+function tensorDataToNumbers(data: OrtTensorData): number[] {
   const values = data as unknown as ArrayLike<number | bigint | boolean>;
   return Array.from({ length: values.length }, (_unused, index) => Number(values[index]));
 }

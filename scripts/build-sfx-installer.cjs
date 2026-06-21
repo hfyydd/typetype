@@ -9,6 +9,7 @@ const releaseDir = path.join(rootDir, "release");
 const appDir = path.join(releaseDir, "win-unpacked");
 const productName = pkg.build?.productName || pkg.name || "typetype";
 const safeProductName = productName.replace(/[\\/:*?"<>|]/g, "-");
+const installDirName = `${safeProductName}-${pkg.version}-runtimefix`;
 const executableName = `${safeProductName}.exe`;
 const archivePath = path.join(releaseDir, `${safeProductName}-customer.7z`);
 const sfxConfigPath = path.join(releaseDir, `${safeProductName}-sfx-config.txt`);
@@ -47,7 +48,7 @@ function main() {
       ";!@Install@!UTF-8!",
       `Title="${productName} 安装"`,
       `BeginPrompt="即将安装 ${productName} 到当前用户目录，并创建桌面快捷方式。"`,
-      `InstallPath="%LocalAppData%\\\\Programs\\\\${safeProductName}"`,
+      `InstallPath="%LocalAppData%\\\\Programs\\\\${installDirName}"`,
       'OverwriteMode="2"',
       'RunProgram="powershell.exe -NoProfile -ExecutionPolicy Bypass -File install.ps1"',
       ";!@InstallEnd@!",
@@ -72,6 +73,7 @@ $exePath = Join-Path $installDir '${executableName}'
 $desktopDir = [Environment]::GetFolderPath('DesktopDirectory')
 $programsDir = [Environment]::GetFolderPath('Programs')
 $startMenuDir = Join-Path $programsDir '${safeProductName}'
+Stop-Process -Name '${safeProductName}' -Force
 New-Item -ItemType Directory -Force -Path $startMenuDir | Out-Null
 
 $shell = New-Object -ComObject WScript.Shell
