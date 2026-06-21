@@ -104,3 +104,9 @@ test("windows packaging explicitly includes ffmpeg.dll beside the executable", (
 test("windows packaging keeps only Chinese and English Electron locales", () => {
   assert.deepEqual(pkg.build.win?.electronLanguages, ["zh-CN", "en-US"]);
 });
+
+test("main branch stays Windows-only and exposes no macOS packaging configuration", () => {
+  assert.equal(pkg.build.mac, undefined);
+  assert.equal(pkg.scripts["build:mac"], undefined);
+  assert.equal(pkg.scripts.build.includes("--mac"), false);
+});

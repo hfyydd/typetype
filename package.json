@@ -9,8 +9,7 @@
     "dev": "npm run build:electron && electron .",
     "build:electron": "node -e \"require('fs').rmSync('dist-electron',{recursive:true,force:true})\" && tsc -p tsconfig.json",
     "build:code-switch-lexicon": "node scripts/build_code_switch_lexicon.js",
-    "build": "npm run build:electron && electron-builder --mac --windows",
-    "build:mac": "npm run build:electron && electron-builder --mac",
+    "build": "npm run build:electron && electron-builder --windows",
     "build:win": "npm run build:electron && electron-builder --win"
   },
   "dependencies": {
@@ -101,14 +100,6 @@
         ]
       }
     ],
-    "mac": {
-      "category": "public.app-category.productivity",
-      "target": [
-        "dmg",
-        "zip"
-      ],
-      "icon": "resources/icon.icns"
-    },
     "win": {
       "target": [
         "nsis"
