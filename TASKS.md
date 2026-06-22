@@ -1655,3 +1655,31 @@ This guarantees only the target-arch native lib is present when electron-builder
 - Signature intact: `Signature=adhoc`, `flags=0x10002(adhoc,runtime)`, x86_64; entitlements include `cs.allow-jit` + `device.audio-input`.
 - DMG size: 1,132,982,574 bytes (~1.05 GiB / 1.13 GB), down from 1,153,093,473 bytes (~1.07 GiB / 1.15 GB). App bundle inside DMG: 1.8G (was 1.9G).
 - `release/typetype-0.3.19-mac.zip` was still compressing at report time (max compression over the large ONNX binaries is slow); DMG is the primary deliverable and is complete.
+
+## Round 15 Notes — 2026-06-22
+
+**Goal.** Fix "录音能录到音频，但 ASR 转不出字" on Intel. User log `(typetype(4).log)` showed mic works (real audio samples received, ~177 chunks), but every `Streaming ASR chunk decoded` was `text_length:0` — zero non-empty text across all 9 recordings.
+
+### Root cause
+
+`multilingual_realtime` streaming mode resolves to `STREAMING_MIXED_MODEL_DIR = 'sherpa-onnx-streaming-paraformer-trilingual-zh-cantonese-en'`. That model directory was **never bundled** — `resources/models/` only had SenseVoice (offline) and zipformer-small-ctc. `asr-bootstrap.getStreamingModelSearchPaths` couldn't find the paraformer dir, fell back past it, and loaded zipformer-small-ctc as the streaming model. Its tokens/config don't match the streaming config (`zipformer2Ctc` + `bpe`), so sherpa-onnx decoded every frame to empty text. Confirmed by simulating `isModelDirectoryCompatible` + `getModelFilesFromDirectory` against the actual files.
+
+(The "6× session started" in the log is a secondary issue — repeated shortcut dispatch during slow ASR init — but it is NOT the cause of empty text; fixing the model is the real fix.)
+
+### Fix
+
+- Bundled the paraformer trilingual int8 streaming model (encoder.int8.onnx 159M + decoder.int8.onnx 69M + tokens + am.mvn) into `resources/models/`. Dropped fp32 weights (607M + 218M) + test_wavs to slim from 1.0G → 241M.
+- `scripts/download-streaming-paraformer-model.js` (new): idempotent provisioning script (download, verify, extract, slim). Model binaries stay gitignored.
+- `package.json` `build:mac-x64` and `build:mac-arm64`: run the download script as a pre-step so the model is guaranteed present at pack time.
+
+### Verification
+
+- `findModelPath` simulation: new dir resolves as compatible paraformer, chosen as first candidate in `getStreamingModelSearchPaths`.
+- `release/typetype-0.3.19.dmg` (1.27 GiB / 1.3 GB). `Sealed Resources files=146` (was 141).
+- Mounted DMG: paraformer model dir contains all 5 runtime files.
+- Signature intact: `Signature=adhoc`, `flags=0x10002(adhoc,runtime)`, x86_64. Entitlements include `cs.allow-jit` + `device.audio-input`.
+
+### Remaining (manual, user-side)
+
+- Install new DMG on Intel Mac, `tccutil reset Microphone app.typetype`, grant mic, record — streaming ASR should now decode text (paraformer model present).
+- If "6× session started" shortcut duplication still occurs, investigate the shortcut watchdog re-dispatch separately.
